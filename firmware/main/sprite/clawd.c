@@ -383,84 +383,72 @@ static void put_unit_quad(const clawd_canvas_t *canvas, const view_t *v, const f
 
 /* 铝合金的三档明暗。金属感全靠这三条带子的排布，不靠渐变——
  * 这个尺度上一像素一档就够读出"是块金属板"。 */
-#define AL_HI clawd_rgb565(0xC6, 0xCD, 0xD3)
-#define AL_MID clawd_rgb565(0x9E, 0xA6, 0xAD)
-#define AL_LO clawd_rgb565(0x74, 0x7C, 0x84)
-#define AL_EDGE clawd_rgb565(0x50, 0x58, 0x5F)
+/*
+ * **暗色合金，不是白色。** 第一版用了 0xC6 那一档的亮灰，
+ * 在纯黑背景上就是一大块惨白，比角色本身还抢眼，看着像暖气片。
+ * 深空灰才不会把主角压下去。
+ */
+#define AL_HI clawd_rgb565(0x8A, 0x92, 0x9A)
+#define AL_MID clawd_rgb565(0x5E, 0x66, 0x6E)
+#define AL_LO clawd_rgb565(0x3E, 0x45, 0x4C)
+#define AL_EDGE clawd_rgb565(0x24, 0x29, 0x2E)
 /* 屏幕漏出来的光。偏冷偏亮，和精灵的暖橙形成对比，画面才有层次。 */
 #define SCREEN_GLOW clawd_rgb565(0xD6, 0xE6, 0xF6)
 #define SCREEN_GLOW_DIM clawd_rgb565(0x6E, 0x86, 0xA0)
 
-#define MAC_BASE_Y 14.30f
-#define MAC_BASE_H 0.62f
-#define MAC_BASE_X 1.35f
-#define MAC_BASE_W 12.30f
-#define MAC_LID_BOT_Y 14.30f
-#define MAC_LID_TOP_Y 11.35f
-#define MAC_LID_BOT_X0 2.00f
-#define MAC_LID_BOT_X1 13.00f
-#define MAC_LID_TOP_X0 2.38f
-#define MAC_LID_TOP_X1 12.62f
+/*
+ * **小**。第一版横跨 12 个单位、高 3 个单位，把腿和大半个身子全挡住——
+ * 那不是"面前放着一台电脑"，那是"被一块板子挡住"。
+ * 缩到 5.5 个单位宽、放在正中偏下，两侧的腿露出来，
+ * 观众才读得出"角色坐在电脑后面"这个空间关系。
+ */
+#define MAC_BASE_Y 15.05f
+#define MAC_BASE_H 0.40f
+#define MAC_BASE_X 4.15f
+#define MAC_BASE_W 6.70f
+#define MAC_LID_BOT_Y 15.05f
+#define MAC_LID_TOP_Y 13.05f
+#define MAC_LID_BOT_X0 4.55f
+#define MAC_LID_BOT_X1 10.45f
+#define MAC_LID_TOP_X0 4.95f
+#define MAC_LID_TOP_X1 10.05f
 
 /**
- * 一台从背面看的笔记本。
+ * 笔记本电脑：**一个平面的 L**。
  *
- * 构图上这是最省事也最好看的一种：**屏幕背对我们**，
- * 于是不用画任何界面内容，只有一块梯形的合金 A 面；
- * 真正说明"它在工作"的是**从上沿溢出来的屏幕光**。
- * 手臂搭在上沿之外还看得见，敲击的起落就有了着落点。
+ * 之前画成三层明暗带的梯形 + 宽底座，结果读出来是台打字机——
+ * 层次越多越像一个带键盘的方盒子。笔记本的辨识度全在**侧影**上：
+ * 一竖（屏幕）加一横（机身），就这两笔。
  *
- * 梯形（上窄下宽）是关键：矩形读作"一块板子"，
- * 梯形才读作"一块朝我们倾斜的板子"。
+ * 所以这里只有两个矩形：竖的屏幕背板、横的机身，加一条顶边高光。
+ * 屏幕微微后仰（上沿比下沿窄一点点）说明它是打开的；
+ * 机身比屏幕宽一点，L 的那一横才伸得出来。
+ * 说明"它在工作"的仍然是上沿溢出的那道光——手臂压低时亮一下。
  */
 static void props_macbook(const clawd_canvas_t *canvas, const view_t *v, float bdy,
                           float arm_l_rot, float arm_r_rot)
 {
-    /* 手臂压得越低 = 敲得越实，屏幕光跟着亮一下 */
     const float dl = arm_l_rot < 0.0f ? (-arm_l_rot) / 0.66f : 0.0f;
     const float dr = arm_r_rot > 0.0f ? (arm_r_rot) / 0.66f : 0.0f;
-    const float hit = dl > dr ? dl : dr;
+    const bool bright = (dl > dr ? dl : dr) > 0.55f;
 
-    /* 1) 屏幕光：先画，让它被后面的 A 面盖住下半，只在上沿露出来一条 */
-    const bool bright = hit > 0.55f;
-    const float halo = bright ? 0.62f : 0.42f;
+    /* 屏幕背板：一竖。上沿略窄 = 朝观众方向敞开着。 */
     put_unit_quad(canvas, v,
-                  (const float[]){MAC_LID_TOP_X0 - 0.5f, MAC_LID_TOP_X1 + 0.5f,
-                                  MAC_LID_TOP_X1 + 0.2f, MAC_LID_TOP_X0 - 0.2f},
-                  (const float[]){MAC_LID_TOP_Y - halo, MAC_LID_TOP_Y - halo,
-                                  MAC_LID_TOP_Y + 0.35f, MAC_LID_TOP_Y + 0.35f},
-                  bdy, bright ? SCREEN_GLOW : SCREEN_GLOW_DIM);
+                  (const float[]){MAC_LID_TOP_X0, MAC_LID_TOP_X1, MAC_LID_BOT_X1,
+                                  MAC_LID_BOT_X0},
+                  (const float[]){MAC_LID_TOP_Y, MAC_LID_TOP_Y, MAC_LID_BOT_Y, MAC_LID_BOT_Y},
+                  bdy, AL_MID);
 
-    /* 2) A 面：上窄下宽的梯形，三条明暗带做出金属的反光 */
-    const float bands[4] = {MAC_LID_TOP_Y, MAC_LID_TOP_Y + 0.9f, MAC_LID_TOP_Y + 2.0f,
-                            MAC_LID_BOT_Y};
-    const uint16_t band_col[3] = {AL_MID, AL_HI, AL_LO};
-    for (int i = 0; i < 3; i++) {
-        const float t0 = (bands[i] - MAC_LID_TOP_Y) / (MAC_LID_BOT_Y - MAC_LID_TOP_Y);
-        const float t1 = (bands[i + 1] - MAC_LID_TOP_Y) / (MAC_LID_BOT_Y - MAC_LID_TOP_Y);
-        const float x00 = MAC_LID_TOP_X0 + (MAC_LID_BOT_X0 - MAC_LID_TOP_X0) * t0;
-        const float x01 = MAC_LID_TOP_X1 + (MAC_LID_BOT_X1 - MAC_LID_TOP_X1) * t0;
-        const float x10 = MAC_LID_TOP_X0 + (MAC_LID_BOT_X0 - MAC_LID_TOP_X0) * t1;
-        const float x11 = MAC_LID_TOP_X1 + (MAC_LID_BOT_X1 - MAC_LID_TOP_X1) * t1;
-        put_unit_quad(canvas, v, (const float[]){x00, x01, x11, x10},
-                      (const float[]){bands[i], bands[i], bands[i + 1], bands[i + 1]}, bdy,
-                      band_col[i]);
-    }
-    /* 上沿一条亮边 = 屏幕边框的高光，一像素就够 */
-    put_unit_quad(canvas, v,
-                  (const float[]){MAC_LID_TOP_X0, MAC_LID_TOP_X1, MAC_LID_TOP_X1 - 0.02f,
-                                  MAC_LID_TOP_X0 + 0.02f},
-                  (const float[]){MAC_LID_TOP_Y, MAC_LID_TOP_Y, MAC_LID_TOP_Y + 0.16f,
-                                  MAC_LID_TOP_Y + 0.16f},
-                  bdy, AL_HI);
+    /* 顶边：一条亮线是边框，上面一条更亮的是漏出来的屏幕光 */
+    put_unit_rect(canvas, v, MAC_LID_TOP_X0, MAC_LID_TOP_Y, MAC_LID_TOP_X1 - MAC_LID_TOP_X0,
+                  0.16f, bdy, AL_HI);
+    put_unit_rect(canvas, v, MAC_LID_TOP_X0 + 0.15f, MAC_LID_TOP_Y - (bright ? 0.26f : 0.15f),
+                  MAC_LID_TOP_X1 - MAC_LID_TOP_X0 - 0.3f, bright ? 0.26f : 0.15f, bdy,
+                  bright ? SCREEN_GLOW : SCREEN_GLOW_DIM);
 
-    /* 3) 机身：一条薄板 + 更暗的前沿，压住整台机器的重量 */
-    put_unit_rect(canvas, v, MAC_BASE_X, MAC_BASE_Y, MAC_BASE_W, MAC_BASE_H * 0.55f, bdy,
-                  AL_HI);
-    put_unit_rect(canvas, v, MAC_BASE_X, MAC_BASE_Y + MAC_BASE_H * 0.55f, MAC_BASE_W,
-                  MAC_BASE_H * 0.45f, bdy, AL_LO);
-    /* 底部一道暗线把机器和地面分开 */
-    put_unit_rect(canvas, v, MAC_BASE_X, MAC_BASE_Y + MAC_BASE_H, MAC_BASE_W, 0.14f, bdy,
+    /* 机身：一横。比屏幕宽，L 才立得住。 */
+    put_unit_rect(canvas, v, MAC_BASE_X, MAC_BASE_Y, MAC_BASE_W, MAC_BASE_H, bdy, AL_HI);
+    put_unit_rect(canvas, v, MAC_BASE_X, MAC_BASE_Y + MAC_BASE_H, MAC_BASE_W, 0.20f, bdy,
                   AL_EDGE);
 }
 
@@ -492,8 +480,10 @@ static const uint32_t SPARK_DELAY[SPARK_COUNT] = {0, 250, 500, 750, 1000, 580};
 #define SPARK_PERIOD 1500
 
 #define CONFETTI_COUNT 10
-static const float CONF_X[CONFETTI_COUNT] = {0.5f, 3.0f, 5.5f, 8.0f, 10.5f,
-                                             13.0f, 1.8f, 6.8f, 11.8f, 14.4f};
+/* **全部落在身体轮廓之外**（躯干占 2..13）。
+ * 第一版横向铺满，结果彩纸糊了角色一身，像出疹子。 */
+static const float CONF_X[CONFETTI_COUNT] = {-1.7f, -1.0f, -0.3f, 0.3f, 1.0f,
+                                             14.0f, 14.7f, 15.4f, 16.1f, 16.8f};
 static const uint32_t CONF_DELAY[CONFETTI_COUNT] = {0,   140, 280, 420, 560,
                                                     700, 840, 980, 1120, 1260};
 static const uint16_t CONF_COL[4] = {0, 0, 0, 0}; /* 运行时填，见下 */
@@ -564,12 +554,16 @@ static void props_waiting(const clawd_canvas_t *canvas, const view_t *v, uint32_
     if (ph < 0.11f || ph > 0.70f) return; /* 灯泡只在举起的那段出现 */
 
     const bool lit = (ph >= 0.20f);
-    const float cx = 14.0f, cy = 5.2f + lift;
+    /*
+     * **灯泡长在手上，不是飘在角落。** 手臂抬起时 lift 是负的，
+     * 灯泡跟着一起走，两者才是一个动作；固定坐标的话它就只是
+     * 右上角一个自己闪的黄块，和角色毫无关系。
+     */
+    const float cx = 14.4f, cy = 8.4f + lift;
 
-    /* 灯泡：玻璃泡 + 灯头，亮起时换色。像素画，不做渐变。 */
-    put_unit_rect(canvas, v, cx - 1.1f, cy - 1.1f, 2.2f, 1.9f, bdy,
-                  lit ? BULB_ON : BULB_OFF);
-    put_unit_rect(canvas, v, cx - 0.55f, cy + 0.8f, 1.1f, 0.7f, bdy,
+    /* 玻璃泡用圆的——方的读不出"灯泡"，只是一个色块。灯头留方，形成对比。 */
+    put_unit_circle(canvas, v, cx, cy - 0.15f, 1.05f, bdy, lit ? BULB_ON : BULB_OFF);
+    put_unit_rect(canvas, v, cx - 0.5f, cy + 0.72f, 1.0f, 0.62f, bdy,
                   lit ? BULB_EDGE_ON : BULB_EDGE_OFF);
 
     if (!lit) return;
@@ -605,24 +599,37 @@ static void props_sleeping(const clawd_canvas_t *canvas, const view_t *v, uint32
      * 周期和 pose_sleeping 的 4.5s 呼吸**严格同相**——泡泡自己有节奏的话
      * 就成了两个不相干的动画摆在一起；同相了才是"它在呼吸"。
      */
+    /*
+     * **泡泡从鼻子出来，长在脸上。**
+     * 第一版把它摆在身体右侧的空白里，那就只是一个飘着的白球，
+     * 跟角色没有关系。鼻涕泡这个梗的全部笑点就在于它连着鼻孔——
+     * 位置错了，再怎么调大小和节奏都不对。
+     *
+     * 睡姿的脸是躯干正面，闭眼的两道横线在 y=12.5，
+     * 鼻子就在两眼之间偏下：x≈7.2, y≈13.7。
+     * 吹大时**锚点留在鼻孔**、球心往外推，才像是从那儿鼓出来的，
+     * 而不是整颗球在原地放大。
+     */
+    const float nose_x = 7.2f, nose_y = 13.7f;
     const float bp = (float)(t % 4500) / 4500.0f;
     if (bp < 0.86f) {
         const float grow = bp / 0.86f;
-        const float r = 0.18f + grow * grow * 0.85f; /* 先慢后快，像真的在被吹大 */
-        put_unit_circle(canvas, v, 15.1f, 12.4f, r, bdy, ZZZ_COL);
-        /* 高光：一颗偏上的小亮点，泡泡才不像实心球 */
-        if (r > 0.45f) {
-            put_unit_circle(canvas, v, 15.1f - r * 0.32f, 12.4f - r * 0.34f, r * 0.22f, bdy,
-                            clawd_rgb565(0xF0, 0xF4, 0xF6));
+        const float r = 0.16f + grow * grow * 1.05f; /* 先慢后快，像真的在被吹大 */
+        const float cx = nose_x + r * 0.62f;
+        const float cy = nose_y + r * 0.30f;
+        put_unit_circle(canvas, v, cx, cy, r, bdy, ZZZ_COL);
+        if (r > 0.40f) {
+            put_unit_circle(canvas, v, cx - r * 0.34f, cy - r * 0.36f, r * 0.26f, bdy,
+                            clawd_rgb565(0xF2, 0xF6, 0xF8));
         }
     } else if (bp < 0.91f) {
-        /* 破掉的一瞬：几个碎点向外散 */
+        /* 破掉的一瞬：几个碎点从鼻尖向外散 */
         const float k = (bp - 0.86f) / 0.05f;
         for (int i = 0; i < 5; i++) {
             const float ang = (float)i * 1.2566f;
-            put_unit_circle(canvas, v, 15.1f + cosf(ang) * (0.9f + k * 0.9f),
-                            12.4f + sinf(ang) * (0.9f + k * 0.9f), 0.16f * (1.0f - k), bdy,
-                            ZZZ_COL);
+            put_unit_circle(canvas, v, nose_x + 0.7f + cosf(ang) * (1.0f + k * 1.0f),
+                            nose_y + 0.3f + sinf(ang) * (1.0f + k * 1.0f),
+                            0.18f * (1.0f - k), bdy, ZZZ_COL);
         }
     }
 
@@ -632,9 +639,9 @@ static void props_sleeping(const clawd_canvas_t *canvas, const view_t *v, uint32
         if (f > 0.9f) continue;
         /* 一边飘一边左右摆，越飘越大——直着往上走看着像字幕，摆起来才像气泡 */
         const float sway = sinf(f * 6.28318f * 1.5f) * 1.2f;
-        const float x = 11.0f + sway;
+        const float x = 12.4f + sway;
         const float y = 9.5f - f * 5.2f;
-        const float u = 0.22f + f * 0.20f;
+        const float u = 0.34f + f * 0.30f;
         draw_pixel_z(canvas, v, x, y, u, bdy, ZZZ_COL);
     }
 }
@@ -664,6 +671,30 @@ static void apply_breathe_and_blink(pose_t *p, uint32_t t)
     static const key_t BLINK[] = {
         {0.00f, 1.0f}, {0.46f, 1.0f}, {0.50f, 0.1f}, {0.54f, 1.0f}, {1.0f, 1.0f}};
     p->eye_scale_y *= ease_keys(BLINK, 5, phase_of(t, 2000));
+}
+
+/*
+ * 发呆：呼吸 + 眨眼 + **左右张望**。
+ *
+ * 只有 2% 的呼吸缩放，在这个尺寸上肉眼根本看不出来——离线渲染出来
+ * 六帧一模一样，就是一排静止的方块。加一个 9 秒的张望循环：
+ * 往左看两秒、回正、往右看两秒，身体跟着微微侧一点（头眼分离会显得呆）。
+ * 眼睛只挪一个单位，但那是整幅画面里唯一在动的东西，"活着"就靠它。
+ */
+static void pose_idle(pose_t *p, uint32_t t)
+{
+    apply_breathe_and_blink(p, t);
+
+    static const key_t LOOK[] = {{0.00f, 0.0f},  {0.12f, 0.0f},  {0.18f, -0.9f},
+                                 {0.34f, -0.9f}, {0.40f, 0.0f},  {0.56f, 0.0f},
+                                 {0.62f, 0.9f},  {0.78f, 0.9f},  {0.84f, 0.0f},
+                                 {1.00f, 0.0f}};
+    p->eye_dx += ease_keys(LOOK, 10, phase_of(t, 9000));
+
+    static const key_t LEAN[] = {{0.00f, 0.0f}, {0.18f, -1.2f}, {0.34f, -1.2f},
+                                 {0.40f, 0.0f}, {0.62f, 1.2f},  {0.78f, 1.2f},
+                                 {0.84f, 0.0f}, {1.00f, 0.0f}};
+    p->body_rot += ease_keys(LEAN, 8, phase_of(t, 9000)) * (float)M_PI / 180.0f;
 }
 
 /*
@@ -729,9 +760,11 @@ static void pose_done(pose_t *p, uint32_t t)
 {
     const float ph = phase_of(t, 1000);
 
-    static const key_t DY[] = {{0.00f, 0.0f},  {0.15f, 0.0f},  {0.20f, 0.0f},
-                               {0.40f, -10.0f}, {0.50f, -12.0f}, {0.60f, -10.0f},
-                               {0.80f, 0.0f},  {0.85f, 0.0f},  {1.00f, 0.0f}};
+    /* 官方那组数是给 30px/单位的画布定的；这里换算成单位量后幅度偏小，
+     * 庆祝本来就该夸张，索性再放大一档——跳得起来才叫狂欢。 */
+    static const key_t DY[] = {{0.00f, 0.0f},   {0.15f, 0.0f},   {0.20f, 0.0f},
+                               {0.40f, -22.0f}, {0.50f, -27.0f}, {0.60f, -22.0f},
+                               {0.80f, 0.0f},   {0.85f, 0.0f},   {1.00f, 0.0f}};
     static const key_t SY[] = {{0.00f, 1.0f},  {0.15f, 1.0f},  {0.20f, 0.85f},
                                {0.40f, 1.05f}, {0.50f, 1.0f},  {0.60f, 1.05f},
                                {0.80f, 0.85f}, {0.85f, 1.0f},  {1.00f, 1.0f}};
@@ -911,7 +944,7 @@ void clawd_draw(const clawd_canvas_t *canvas, const clawd_draw_t *p)
         default:
             /* 站着发呆用**加长的腿**，身体立起来才有精神——官方 idle 就是这么画的 */
             pose.body_form = 1;
-            apply_breathe_and_blink(&pose, p->elapsed_ms);
+            pose_idle(&pose, p->elapsed_ms);
             break;
     }
 
