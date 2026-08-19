@@ -121,9 +121,11 @@ static void apply_frame(const cJSON *root)
     if (strcmp(e, "prompt") == 0) {
         set_status(s, SESS_BUSY, t);
         s->done_pending = false;
+        s->done_chimed = false;
     } else if (strcmp(e, "turn_end") == 0) {
         /* 一轮结束：进入"刚完成"一次性状态，并清空 subagent 圆点 */
         s->done_pending = true;
+        s->done_chimed = false; /* 新的一次完成，允许再响一声 */
         s->done_at_ms = t;
         model_clear_subagents(s);
         set_status(s, SESS_IDLE, t);

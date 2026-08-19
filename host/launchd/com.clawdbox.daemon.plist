@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  开机自启守护进程。
+
+  KeepAlive 只在异常退出时重启（SuccessfulExit=false）——正常退出说明是
+  你自己停的，不该被 launchd 立刻拉起来。
+
+  安装：
+    cp host/launchd/com.clawdbox.daemon.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.clawdbox.daemon.plist
+  卸载：
+    launchctl unload ~/Library/LaunchAgents/com.clawdbox.daemon.plist
+
+  注意：路径写死在下面，仓库若不在 ~/AI/weixue 需要一并改。
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.clawdbox.daemon</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/shihaosen/.bun/bin/bun</string>
+    <string>run</string>
+    <string>/Users/shihaosen/AI/weixue/host/src/index.ts</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/shihaosen/AI/weixue/host</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <!-- 板子拔掉时守护进程会退避重连而不是退出，所以这里不该频繁触发；
+       真触发了就说明是崩溃，10 秒足够避免疯狂重启刷日志。 -->
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/clawdbox-daemon.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/clawdbox-daemon.log</string>
+</dict>
+</plist>

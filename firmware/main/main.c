@@ -14,6 +14,7 @@
 #include "model/sessions.h"
 #include "sprite/clawd.h"
 #include "sprite/text.h"
+#include "audio/audio.h"
 #include "bsp/bsp_imu.h"
 #include "input/input.h"
 #include "motion.h"
@@ -87,6 +88,8 @@ void app_main(void)
            (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
 
     ESP_ERROR_CHECK(input_init());
+    /* 没喇叭不致命——界面照常工作，只是不出声 */
+    if (audio_init() != ESP_OK) printf("  音频不可用，静音运行\n");
     const bool has_imu = (bsp_imu_init() == ESP_OK);
     motion_t motion;
     motion_init(&motion);
@@ -123,6 +126,31 @@ void app_main(void)
         }
 
         clawd_state_t state = focus != NULL ? model_clawd_state(focus, t) : CLAWD_SLEEPING;
+
+        /*
+         * 提示音的触发点。**视觉和听觉在这里分开**：
+         * 动作一直在演（就在下面），这里只决定什么时候再响一次。
+         *
+         * 完成音走边沿——真实的"干完了"跃迁才响，且只响一次，那是通知不是催促；
+         * 等待输入走退避重复，直到你处理或按键确认。
+         */
+        for (int i = 0; i < MAX_SESSIONS; i++) {
+            session_t *s = model_at(&s_model, i);
+            if (s == NULL) break;
+            if (model_reminder_due(s, t)) audio_play(SOUND_NEEDS_YOU);
+        }
+        if (focus != NULL && focus->done_pending && !focus->done_chimed) {
+            focus->done_chimed = true;
+            audio_play(SOUND_DONE);
+        }
+        /* 限额告急只在跨过 95% 的那一次响 */
+        {
+            const bool critical = s_model.limits.five_hour.pct >= 95.0f ||
+                                  s_model.limits.seven_day.pct >= 95.0f;
+            static bool was_critical = false;
+            if (critical && !was_critical) audio_play(SOUND_LIMIT);
+            was_critical = critical;
+        }
 
         if (state == CLAWD_DONE && focus != NULL &&
             clawd_done_finished(t - focus->done_at_ms)) {

@@ -10,6 +10,7 @@ idf_component_register(
         "bsp/bsp_touch.c"
         "bsp/bsp_imu.c"
         "motion.c"
+        "audio/audio.c"
         "input/input.c"
         "ui/pages.c"
         "ui/pager.c"
@@ -21,6 +22,7 @@ idf_component_register(
         "link"
         "input"
         "ui"
+        "audio"
     REQUIRES
         driver
         esp_lcd

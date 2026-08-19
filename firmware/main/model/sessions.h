@@ -43,6 +43,8 @@ typedef struct {
     /* 一次性状态：刚完成。播完由仲裁器清掉。 */
     uint32_t done_at_ms;
     bool done_pending;
+    /** 完成音已响过。边沿触发用——完成是通知，重复响就变成催促了。 */
+    bool done_chimed;
 
     /* 等待输入的退避提醒 */
     uint32_t waiting_since_ms;

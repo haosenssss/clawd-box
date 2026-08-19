@@ -10,9 +10,6 @@ dependencies:
   # 提供 esp_lcd_new_panel_io_3wire_spi：把 SPI 时序打在 IO 扩展器引脚上
   espressif/esp_lcd_panel_io_additions: "^1.0.1"
 
-  # 电容触摸
-  espressif/esp_lcd_touch_gt911: "^1.1.0"
-
-  # UI
-  lvgl/lvgl: "^9.2.0"
-  espressif/esp_lvgl_port: "^2.4.0"
+  # 音频：ES8311 编解码器。用官方组件而不是自己抄寄存器序列——
+  # 那串初始化序列出一点错就是"没声音"，没有中间态可查。
+  espressif/esp_codec_dev: "^1.3.4"

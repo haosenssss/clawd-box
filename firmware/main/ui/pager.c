@@ -63,8 +63,16 @@ bool pager_input(pager_t *p, model_t *m, input_event_t e, uint32_t now_ms)
         }
 
         case INPUT_ACK:
-            /* 确认只静音，不改页面——所以不算"页面变了" */
-            model_reminder_ack(model_ring_at(m, p->ring_index, now_ms));
+            /*
+             * 确认 **≠ 消除**：只是不再出声，视觉状态照旧持续显示，
+             * 状态本身消失才算完。所以这里不算"页面变了"。
+             * 屏幕上有几个在等就一起确认——你已经知道了。
+             */
+            for (int i = 0; i < MAX_SESSIONS; i++) {
+                session_t *s = model_at(m, i);
+                if (s == NULL) break;
+                if (s->status == SESS_WAITING) model_reminder_ack(s);
+            }
             return false;
 
         case INPUT_NONE:
