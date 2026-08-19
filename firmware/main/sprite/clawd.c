@@ -210,6 +210,83 @@ static void transform_rect(const view_t *v, const rect_t *r, float pivot_x, floa
     }
 }
 
+
+/* ------------------------------------------------------------------ *
+ * 干活时的道具：键盘 + 按键闪烁 + 数据粒子
+ *
+ * 只有身体在抖是不够的——**"在敲键盘"这件事需要键盘本身在场**。
+ * 官方 clawd-working-typing.svg 里键盘画在腿的前面、手臂的后面，
+ * 于是双手正好落在键帽上；6 个按键闪烁用互质的周期，
+ * 看起来就是没有规律地噼里啪啦，这点不规则才是"在打字"的观感来源。
+ * ------------------------------------------------------------------ */
+
+#define KB_COL clawd_rgb565(0x45, 0x5A, 0x64)
+#define KEY_COL clawd_rgb565(0x78, 0x90, 0x9C)
+#define KEY_HIT_COL clawd_rgb565(0xCF, 0xD8, 0xDC)
+#define BIT_COL clawd_rgb565(0x40, 0xC4, 0xFF)
+
+#define KB_KEYS 7
+static const rect_t R_KEYBOARD = {-0.5f, 12.9f, 16.0f, 2.5f};
+
+/* 6 个按键的闪烁周期与相位，全部互质——规律一旦对齐就立刻假了 */
+static const uint32_t KEY_PERIOD[6] = {600, 800, 500, 700, 550, 900};
+static const uint32_t KEY_OFFSET[6] = {0, 250, 100, 450, 300, 500};
+/* 哪些键帽会闪：{行, 列} */
+static const int KEY_HIT[6][2] = {{0, 1}, {0, 4}, {1, 2}, {1, 5}, {0, 6}, {1, 0}};
+
+/* 数据粒子：从身体两侧升起，填掉人物上方的空档 */
+#define BIT_COUNT 4
+static const float BIT_X[BIT_COUNT] = {-1.3f, 15.4f, -1.0f, 15.1f};
+static const uint32_t BIT_DELAY[BIT_COUNT] = {0, 400, 800, 1200};
+#define BIT_PERIOD 1600
+#define BIT_Y_LO 8.2f
+#define BIT_Y_HI 4.3f
+
+static void draw_working_props(const clawd_canvas_t *canvas, const view_t *v, uint32_t t,
+                               float bdy)
+{
+    pt_t quad[4];
+
+    /* 键盘底板 */
+    transform_rect(v, &R_KEYBOARD, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, bdy, quad);
+    fill_quad(canvas, quad, KB_COL);
+
+    /* 两排键帽 */
+    const float kw = 1.75f, kh = 0.7f, gap = 0.35f;
+    const float x0 = R_KEYBOARD.x + 0.45f;
+    for (int row = 0; row < 2; row++) {
+        for (int col = 0; col < KB_KEYS; col++) {
+            rect_t key = {x0 + (float)col * (kw + gap), 13.25f + (float)row * 1.0f, kw, kh};
+
+            uint16_t col16 = KEY_COL;
+            for (int k = 0; k < 6; k++) {
+                if (KEY_HIT[k][0] != row || KEY_HIT[k][1] != col) continue;
+                const uint32_t ph = (t + KEY_OFFSET[k]) % KEY_PERIOD[k];
+                /* 只在周期的一小段亮起——按下去是"一下"，不是"一半时间" */
+                if (ph < KEY_PERIOD[k] / 5) col16 = KEY_HIT_COL;
+            }
+            transform_rect(v, &key, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, bdy, quad);
+            fill_quad(canvas, quad, col16);
+        }
+    }
+
+    /* 数据粒子：升起 + 由小变大，到顶消失 */
+    for (int i = 0; i < BIT_COUNT; i++) {
+        const uint32_t ph = (t + BIT_DELAY[i]) % BIT_PERIOD;
+        const float f = (float)ph / (float)BIT_PERIOD;
+        /* 头尾各留 15% 做淡入淡出——这里没有透明度，就用尺寸代替 */
+        float sz = 0.85f;
+        if (f < 0.15f) sz *= f / 0.15f;
+        else if (f > 0.8f) sz *= (1.0f - f) / 0.2f;
+        if (sz < 0.15f) continue;
+
+        const float y = BIT_Y_LO + (BIT_Y_HI - BIT_Y_LO) * f;
+        rect_t bit = {BIT_X[i] - sz * 0.5f, y - sz * 0.5f, sz, sz};
+        transform_rect(v, &bit, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, bdy, quad);
+        fill_quad(canvas, quad, BIT_COL);
+    }
+}
+
 /* ------------------------------------------------------------------ *
  * 各状态的动作曲线
  * ------------------------------------------------------------------ */
@@ -526,6 +603,9 @@ void clawd_draw(const clawd_canvas_t *canvas, const clawd_draw_t *p)
     /* 躯干 */
     BODY_XFORM(torso);
     fill_quad(canvas, quad, p->body_color);
+
+    /* 键盘画在腿和躯干之上、手臂之下——双手才会落在键帽上 */
+    if (p->state == CLAWD_WORKING) draw_working_props(canvas, &view, p->elapsed_ms, bdy);
 
     /* 双臂 */
     if (pose.body_form == 2) {

@@ -39,9 +39,18 @@ static void format_countdown(char *out, size_t n, int64_t resets_at, int64_t now
      */
     const int64_t days = left / 86400;
     const int64_t hours = left / 3600;
-    if (days > 0)       snprintf(out, n, "%lldd", (long long)days);
-    else if (hours > 0) snprintf(out, n, "%lldh", (long long)hours);
-    else                snprintf(out, n, "%lldm", (long long)(left / 60) + 1);
+    const int64_t mins = (left % 3600) / 60;
+    if (days > 0) {
+        /* 周额度剩几天就够了，精确到小时没有决策价值 */
+        snprintf(out, n, "%lldd", (long long)days);
+    } else if (hours > 0) {
+        /* 5 小时窗口要看到分钟——"还有 2 小时"和"还有 2 小时 55 分"
+         * 是两个不同的决定。写成 2:45 而不是 2h45m，同样的信息少一个字符，
+         * 省下来的横向空间全归了上面的图形。 */
+        snprintf(out, n, "%lld:%02lld", (long long)hours, (long long)mins);
+    } else {
+        snprintf(out, n, "%lldm", (long long)mins + 1);
+    }
 }
 
 /**
@@ -49,27 +58,63 @@ static void format_countdown(char *out, size_t n, int64_t resets_at, int64_t now
  * 会话名长度不可控（实测有 "opinion-level-attribution-research" 这种），
  * 不做保护就会画到屏幕外。
  */
-static void draw_fit_center(const text_canvas_t *tc, int cx, int y, const char *s,
-                            int max_w, int scale, uint16_t color)
+/**
+ * 项目名：放得下就一行，放不下就**折成两行**，字号不变。
+ *
+ * 原来的做法是一路降字号，结果 "clawd-hardware-status-panel" 这种长名
+ * 会缩到根本看不清——横屏就那么宽，靠缩字是解决不了的。
+ * 折行在分隔符（- / _ / .）处断，断点取最接近中点的那个，两行才均衡；
+ * 找不到分隔符才按字符硬断。两行还放不下才降字号，最后才截断。
+ */
+static void draw_name(const text_canvas_t *tc, int cx, int y, int line_h, const char *s,
+                      int max_w, int scale, uint16_t color)
 {
     if (text_width(s, scale) <= max_w) {
-        text_draw_center(tc, cx, y, s, scale, color);
+        text_draw_center(tc, cx, y + line_h / 2, s, scale, color);
         return;
     }
-    if (scale > 1 && text_width(s, scale - 1) <= max_w) {
-        text_draw_center(tc, cx, y, s, scale - 1, color);
+
+    const int len = (int)strlen(s);
+    /* 断点候选：所有分隔符，挑离中点最近的 */
+    int split = -1, best = len;
+    for (int i = 1; i < len - 1; i++) {
+        if (s[i] != '-' && s[i] != '_' && s[i] != '.') continue;
+        const int d = i > len / 2 ? i - len / 2 : len / 2 - i;
+        if (d < best) { best = d; split = i; }
+    }
+    if (split < 0) split = len / 2; /* 没有分隔符就硬断 */
+
+    char a[40], b[40];
+    int na = split < (int)sizeof(a) - 1 ? split : (int)sizeof(a) - 1;
+    memcpy(a, s, (size_t)na);
+    a[na] = '\0';
+    /* 断在分隔符上时，分隔符留给上一行行尾更好读 */
+    const int start = (s[split] == '-' || s[split] == '_' || s[split] == '.') ? split : split;
+    snprintf(b, sizeof(b), "%s", s + start);
+
+    if (text_width(a, scale) <= max_w && text_width(b, scale) <= max_w) {
+        text_draw_center(tc, cx, y, a, scale, color);
+        text_draw_center(tc, cx, y + line_h, b, scale, color);
         return;
     }
-    /* 还是放不下：按字符数截断并加 ".." */
-    const int use = scale > 1 ? scale - 1 : scale;
-    const int per = TEXT_ADVANCE(use);
-    int fit = (max_w - text_width("..", use)) / per;
+
+    /* 两行还是超宽：降一档字号再试 */
+    const int sm = scale > 1 ? scale - 1 : scale;
+    if (text_width(a, sm) <= max_w && text_width(b, sm) <= max_w) {
+        text_draw_center(tc, cx, y, a, sm, color);
+        text_draw_center(tc, cx, y + line_h, b, sm, color);
+        return;
+    }
+
+    /* 最后手段：截断第二行 */
+    const int per = TEXT_ADVANCE(sm);
+    int fit = (max_w - text_width("..", sm)) / per;
     if (fit < 1) fit = 1;
-    char buf[64];
-    const int n = fit < (int)sizeof(buf) - 3 ? fit : (int)sizeof(buf) - 3;
-    memcpy(buf, s, (size_t)n);
-    buf[n] = '.'; buf[n + 1] = '.'; buf[n + 2] = '\0';
-    text_draw_center(tc, cx, y, buf, use, color);
+    if (fit < (int)strlen(b)) {
+        b[fit] = '.'; b[fit + 1] = '.'; b[fit + 2] = '\0';
+    }
+    text_draw_center(tc, cx, y, a, sm, color);
+    text_draw_center(tc, cx, y + line_h, b, sm, color);
 }
 
 /* ------------------------------------------------------------------ */
@@ -243,8 +288,8 @@ void session_page_draw(uint16_t *fb, const text_canvas_t *tc, const model_t *m,
      * 挤一行必然溢出屏幕；分行后各自还能独立降字号/截断。
      * 亮度也分层：名字是上下文（中灰），状态词更暗，把注意力留给底部的数据。
      */
-    fill_rect(fb, 0, NAME_Y - 6, BSP_LCD_H_RES, VERB_Y - NAME_Y + TEXT_HEIGHT(TEXT_SCALE) + 12,
-              COL_BG);
+    fill_rect(fb, 0, NAME_Y - 6, BSP_LCD_H_RES,
+              VERB_Y - NAME_Y + TEXT_HEIGHT(TEXT_SCALE) + 12, COL_BG);
     if (focus != NULL) {
         /* 进行中的状态带省略号——"还在继续"是这三个点唯一要传达的意思；
          * done / idle 是终态，加了反而像卡住了。 */
@@ -259,13 +304,13 @@ void session_page_draw(uint16_t *fb, const text_canvas_t *tc, const model_t *m,
         /* 只有"在跑"的状态才高亮；待机/睡觉压暗，避免和额度栏抢注意力 */
         const bool running = (state == CLAWD_WORKING || state == CLAWD_WAITING ||
                               state == CLAWD_DONE);
-        draw_fit_center(tc, BSP_LCD_H_RES / 2, NAME_Y, focus->name, BSP_LCD_H_RES - 40,
+        draw_name(tc, BSP_LCD_H_RES / 2, NAME_Y, NAME_LINE_H, focus->name, BSP_LCD_H_RES - 40,
                         TEXT_SCALE, COL_TEXT);
-        draw_fit_center(tc, BSP_LCD_H_RES / 2, VERB_Y, verb, BSP_LCD_H_RES - 40,
+        text_draw_center(tc, BSP_LCD_H_RES / 2, VERB_Y, verb,
                         TEXT_SCALE, running ? COL_TEXT : COL_VERB);
     } else {
-        draw_fit_center(tc, BSP_LCD_H_RES / 2, NAME_Y, "no active session",
-                        BSP_LCD_H_RES - 40, TEXT_SCALE, COL_VERB);
+        draw_name(tc, BSP_LCD_H_RES / 2, NAME_Y, NAME_LINE_H, "no active session",
+                  BSP_LCD_H_RES - 40, TEXT_SCALE, COL_VERB);
     }
 
     /* 底部四条等距 */
@@ -334,9 +379,6 @@ uint32_t session_page_signature(const model_t *m, const session_t *focus,
  * ------------------------------------------------------------------ */
 
 #define ADMIN_TITLE_Y 34
-#define ADMIN_ROW_Y0 84
-#define ADMIN_ROW_DY 38
-#define ADMIN_ROW_MAX 6
 #define ADMIN_DOT_X 32
 #define ADMIN_NAME_X 54
 

@@ -25,3 +25,10 @@ esp_err_t input_init(void);
 
 /** 每帧调一次。没有输入时返回 INPUT_NONE。 */
 input_event_t input_poll(uint32_t now_ms);
+
+/**
+ * 上一次点按落在哪一行（屏幕 y）。
+ * 管理页要靠它判断你点的是列表里的哪个会话——**没有坐标就没法"点进去"**。
+ * 实体键触发的确认没有坐标，返回 -1。
+ */
+int16_t input_tap_y(void);

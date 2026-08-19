@@ -1,5 +1,7 @@
 #include "pager.h"
 
+#include "ui/pages.h"
+
 #include <string.h>
 
 /* 轮播停留时长。计划里是 5~10 秒，取中间值。 */
@@ -62,7 +64,27 @@ bool pager_input(pager_t *p, model_t *m, input_event_t e, uint32_t now_ms)
             return true;
         }
 
-        case INPUT_ACK:
+        case INPUT_ACK: {
+            /* 管理页上的点按 = 进入那一行的会话页 */
+            if (p->kind == PAGE_ADMIN) {
+                const int16_t ty = input_tap_y();
+                if (ty >= 0) {
+                    const int row = (ty - (ADMIN_ROW_Y0 - 14)) / ADMIN_ROW_DY;
+                    session_t *s = (row >= 0 && row < ADMIN_ROW_MAX)
+                                       ? model_at(m, row) : NULL;
+                    if (s != NULL) {
+                        strncpy(p->pinned_id, s->id, SESSION_ID_LEN - 1);
+                        p->pinned_id[SESSION_ID_LEN - 1] = '\0';
+                        strncpy(p->last_focus_id, s->id, SESSION_ID_LEN - 1);
+                        p->last_focus_id[SESSION_ID_LEN - 1] = '\0';
+                        p->kind = PAGE_SESSION;
+                        p->focus_since = now_ms;
+                        return true;
+                    }
+                }
+                return false;
+            }
+            /* 会话页上的点按走下面的静音逻辑 */
             /*
              * 确认 **≠ 消除**：只是不再出声，视觉状态照旧持续显示，
              * 状态本身消失才算完。所以这里不算"页面变了"。
@@ -74,6 +96,7 @@ bool pager_input(pager_t *p, model_t *m, input_event_t e, uint32_t now_ms)
                 if (s->status == SESS_WAITING) model_reminder_ack(s);
             }
             return false;
+        }
 
         case INPUT_NONE:
         default:
@@ -84,6 +107,15 @@ bool pager_input(pager_t *p, model_t *m, input_event_t e, uint32_t now_ms)
 session_t *pager_tick(pager_t *p, model_t *m, uint32_t now_ms)
 {
     if (p->kind == PAGE_ADMIN) return NULL;
+
+    /* 钉住的会话优先，且不受轮播环的收录规则限制 */
+    if (p->pinned_id[0] != '\0') {
+        if ((int32_t)(p->manual_until - now_ms) > 0) {
+            session_t *pin = model_find_session(m, p->pinned_id);
+            if (pin != NULL) return pin;
+        }
+        p->pinned_id[0] = '\0'; /* 静默期过了或会话没了，交还给自动规则 */
+    }
 
     const int n = model_ring_count(m, now_ms);
     if (n == 0) {

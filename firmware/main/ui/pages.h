@@ -19,6 +19,11 @@ void session_page_draw(uint16_t *fb, const text_canvas_t *tc, const model_t *m,
 uint32_t session_page_signature(const model_t *m, const session_t *focus,
                                 clawd_state_t state, uint32_t now_ms_);
 
+/* 管理页列表的行几何。pager 要靠它把点按的 y 映射回是哪一行。 */
+#define ADMIN_ROW_Y0 84
+#define ADMIN_ROW_DY 38
+#define ADMIN_ROW_MAX 6
+
 /** 管理页：全部会话一览 + 额度总览。 */
 void admin_page_draw(uint16_t *fb, const text_canvas_t *tc, const model_t *m,
                      uint32_t now_ms_, int64_t now_unix);

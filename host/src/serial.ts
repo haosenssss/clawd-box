@@ -199,7 +199,13 @@ export function openSerialLink(options: SerialOptions = {}): SerialLink {
     /* 复用同一个 fd 读板子的日志——不新开设备，就不会有 DTR/RTS 毛刺 */
     if (options.onBoardLine !== undefined) {
       reader = createReadStream('', { fd, autoClose: false })
-      reader.on('error', () => {/* 拔线时读端也会报错，交给写端统一处理 */})
+      /*
+       * **读端报错也要走重连。**
+       * 拔线时如果恰好没有待发的帧，写端就不会失败，状态会一直停在
+       * "已连接"而 fd 早就死了——插回来也不会重新握手。
+       * 读端是更早的信号，直接触发同一套退避重连。
+       */
+      reader.on('error', () => fail())
       reader.on('data', (chunk) => {
         rxBuf += chunk.toString('utf8')
         /* 板子日志偶尔会有超长行，截断而不是无限堆积 */

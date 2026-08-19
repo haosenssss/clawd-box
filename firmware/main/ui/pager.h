@@ -24,6 +24,13 @@ typedef struct {
     uint32_t manual_until;
     /** 从管理页往右回来时落回的会话 */
     char last_focus_id[SESSION_ID_LEN];
+    /**
+     * 手动钉住的会话。
+     * 管理页点一行就钉住它——**哪怕它是空闲的、不在轮播环里**。
+     * 环只收录在跑和在等的，但"我想看看那个已经收工的项目"是完全合理的需求，
+     * 不该被自动规则挡住。手动静默期一过自动解除。
+     */
+    char pinned_id[SESSION_ID_LEN];
 } pager_t;
 
 void pager_init(pager_t *p, uint32_t now_ms);
