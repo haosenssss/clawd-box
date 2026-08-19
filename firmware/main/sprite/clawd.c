@@ -388,9 +388,9 @@ static void put_unit_quad(const clawd_canvas_t *canvas, const view_t *v, const f
  * 在纯黑背景上就是一大块惨白，比角色本身还抢眼，看着像暖气片。
  * 深空灰才不会把主角压下去。
  */
-#define AL_HI clawd_rgb565(0x8A, 0x92, 0x9A)
-#define AL_MID clawd_rgb565(0x5E, 0x66, 0x6E)
-#define AL_LO clawd_rgb565(0x3E, 0x45, 0x4C)
+#define AL_HI clawd_rgb565(0xA6, 0xAE, 0xB6)
+#define AL_MID clawd_rgb565(0x78, 0x81, 0x89)
+#define AL_LO clawd_rgb565(0x4E, 0x56, 0x5D)
 #define AL_EDGE clawd_rgb565(0x24, 0x29, 0x2E)
 /* 屏幕漏出来的光。偏冷偏亮，和精灵的暖橙形成对比，画面才有层次。 */
 #define SCREEN_GLOW clawd_rgb565(0xD6, 0xE6, 0xF6)
@@ -402,16 +402,16 @@ static void put_unit_quad(const clawd_canvas_t *canvas, const view_t *v, const f
  * 缩到 5.5 个单位宽、放在正中偏下，两侧的腿露出来，
  * 观众才读得出"角色坐在电脑后面"这个空间关系。
  */
-#define MAC_BASE_Y 15.05f
-#define MAC_BASE_H 0.40f
-#define MAC_BASE_X 4.15f
-#define MAC_BASE_W 6.70f
-#define MAC_LID_BOT_Y 15.05f
-#define MAC_LID_TOP_Y 13.05f
-#define MAC_LID_BOT_X0 4.55f
-#define MAC_LID_BOT_X1 10.45f
-#define MAC_LID_TOP_X0 4.95f
-#define MAC_LID_TOP_X1 10.05f
+#define MAC_BASE_Y 12.75f
+#define MAC_BASE_H 0.52f
+#define MAC_BASE_X 3.55f
+#define MAC_BASE_W 7.90f
+#define MAC_LID_BOT_Y 12.75f
+#define MAC_LID_TOP_Y 10.75f
+#define MAC_LID_BOT_X0 4.35f
+#define MAC_LID_BOT_X1 10.65f
+#define MAC_LID_TOP_X0 3.75f
+#define MAC_LID_TOP_X1 11.25f
 
 /**
  * 笔记本电脑：**一个平面的 L**。
@@ -421,8 +421,10 @@ static void put_unit_quad(const clawd_canvas_t *canvas, const view_t *v, const f
  * 一竖（屏幕）加一横（机身），就这两笔。
  *
  * 所以这里只有两个矩形：竖的屏幕背板、横的机身，加一条顶边高光。
- * 屏幕微微后仰（上沿比下沿窄一点点）说明它是打开的；
- * 机身比屏幕宽一点，L 的那一横才伸得出来。
+ * 屏幕**上宽下窄**：它是朝观众这一侧倒过来的，上沿离我们更近所以更宽。
+ * 反过来做（上窄下宽）就成了朝角色那边倒，看着像屏幕背对着他自己。
+ * 高度卡在**眼睛下沿之下**：眼睛在 8..10，屏幕上沿再高就把脸挡住了，
+ * 那就成了"人躲在电脑后面"。机身横在 12.75，手臂放下来正好够得着。
  * 说明"它在工作"的仍然是上沿溢出的那道光——手臂压低时亮一下。
  */
 static void props_macbook(const clawd_canvas_t *canvas, const view_t *v, float bdy,
@@ -996,6 +998,12 @@ void clawd_draw(const clawd_canvas_t *canvas, const clawd_draw_t *p)
     fill_quad(canvas, quad, p->body_color);
 
 
+    /* 笔记本画在**手臂之前**：机身在腰线高度，手放下来搭在上面。
+     * 反过来的话电脑会盖住手，就成了"人躲在电脑后面"而不是"人在用电脑"。 */
+    if (p->state == CLAWD_WORKING) {
+        props_macbook(canvas, &view, bdy, pose.arm_l_rot, pose.arm_r_rot);
+    }
+
     /* 双臂 */
     if (pose.body_form == 2) {
         /* 睡姿的手是摊在地上的，跟着身体一起缩放，不单独旋转 */
@@ -1054,12 +1062,6 @@ void clawd_draw(const clawd_canvas_t *canvas, const clawd_draw_t *p)
         transform_rect(&view, &er, BODY_PIVOT_X, BODY_PIVOT_Y, pose.body_rot, pose.body_sx,
                        pose.body_sy, bdx, bdy, quad);
         fill_quad(canvas, quad, p->eye_color);
-    }
-
-    /* 笔记本画在**手臂之后**：手搭在上沿之外还看得见，
-     * 屏幕和身体的下半则被它挡住——这正是从背后看一个人用电脑的样子。 */
-    if (p->state == CLAWD_WORKING) {
-        props_macbook(canvas, &view, bdy, pose.arm_l_rot, pose.arm_r_rot);
     }
 
     /* 道具画在最后：它们都在人物轮廓之外，不会被身体盖住 */

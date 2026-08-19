@@ -10,6 +10,9 @@
 /* 一次性状态的最短保持时长——防止状态抖动导致动画闪烁 */
 #define DONE_HOLD_MS 1200U
 
+/* 闲置多久算睡着 */
+#define IDLE_TO_SLEEP_MS 60000U
+
 void model_init(model_t *m)
 {
     memset(m, 0, sizeof(*m));
@@ -256,6 +259,16 @@ clawd_state_t model_clawd_state(const session_t *s, uint32_t now_ms)
         case SESS_WAITING: return CLAWD_WAITING;
         case SESS_BUSY: return CLAWD_WORKING;
         case SESS_IDLE:
-        default: return CLAWD_IDLE;
+        default:
+            /*
+             * **闲久了就该睡着。**
+             * 原来只有"一个会话都没有"时才演睡姿，于是从管理页点进一个
+             * 早就收工的项目，看到的还是站着发呆——那个姿势是给"刚停下"
+             * 准备的，用在一个几小时没动静的项目上就显得没道理。
+             * 一分钟没动静就摊平睡觉，和人的直觉一致。
+             */
+            return (uint32_t)(now_ms - s->status_since_ms) > IDLE_TO_SLEEP_MS
+                       ? CLAWD_SLEEPING
+                       : CLAWD_IDLE;
     }
 }
