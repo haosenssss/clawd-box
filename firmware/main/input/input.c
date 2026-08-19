@@ -9,10 +9,15 @@
 static const char *TAG = "input";
 
 /* ---- 手势阈值 ---- */
-/* 滑动判定的最小水平位移。屏宽 480，1/8 屏宽足够区分"划"和"点歪了"。 */
-#define SWIPE_MIN_PX 60
-/* 超过这个时长就不算滑动了——手指按着不动再移开不该翻页 */
-#define SWIPE_MAX_MS 800
+/*
+ * 滑动阈值。**实测调过**：最初 60px / 800ms 太苛刻，日志里大量真实滑动被丢弃：
+ *     dx=59  dt=1140ms  ← 划得慢了一点就超时
+ *     dx=36  dt=90ms    ← 快速轻扫不到 60px
+ * 4 寸屏上手指行程本来就短，而且贴墙操作往往是慢慢划的。
+ * 放宽到 36px / 1600ms，误触由"点按"那条更严的判据兜住。
+ */
+#define SWIPE_MIN_PX 36
+#define SWIPE_MAX_MS 1600
 /* 点按：位移和时长都要小 */
 #define TAP_MAX_PX 24
 #define TAP_MAX_MS 300
@@ -100,7 +105,8 @@ static input_event_t poll_touch(uint32_t now_ms)
     /* 抬起这一帧读到的坐标已经无效，用最后一次按下的位置来判 */
     const int dx = (int)p.x - (int)s_touch.x0;
 
-    ESP_LOGI(TAG, "抬起: dx=%d dt=%ums (起点 x=%d)", dx, (unsigned)dt, (int)s_touch.x0);
+    ESP_LOGI(TAG, "抬起: dx=%d dt=%ums (起点 x=%d, y=%d)", dx, (unsigned)dt,
+             (int)s_touch.x0, (int)p.y);
     if (dt < SWIPE_MAX_MS && dx >= SWIPE_MIN_PX) return INPUT_GO_LEFT;
     if (dt < SWIPE_MAX_MS && dx <= -SWIPE_MIN_PX) return INPUT_GO_RIGHT;
     if (dt < TAP_MAX_MS && dx > -TAP_MAX_PX && dx < TAP_MAX_PX) {

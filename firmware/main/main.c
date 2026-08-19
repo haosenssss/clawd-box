@@ -257,16 +257,10 @@ void app_main(void)
         for (int i = 0; i < box.w * box.h; i++) s_scratch[i] = COL_BG;
         const clawd_canvas_t scratch_canvas = {
             .pixels = s_scratch, .width = box.w, .height = box.h};
-        const text_canvas_t scratch_text = {
-            .pixels = s_scratch, .width = box.w, .height = box.h};
         clawd_draw_t local = params;
         local.center_x = params.center_x + (int)dx - box.x;
         local.baseline_y = params.baseline_y + (int)dy - box.y;
         clawd_draw(&scratch_canvas, &local);
-        if (state == CLAWD_SLEEPING) {
-            draw_zzz(&scratch_text, local.center_x + 104,
-                     local.baseline_y - (int)(9.0f * SPRITE_SCALE) + 14, t);
-        }
 
         /* 2) 整块拷进帧缓冲——一次线性写入，不暴露中间态 */
         for (int row = 0; row < box.h; row++) {

@@ -111,48 +111,153 @@ typedef struct {
     float x, y;
 } pt_t;
 
-static void put_span(const clawd_canvas_t *c, int y, int x0, int x1, uint16_t color)
+/**
+ * RGB565 混色。抗锯齿的边缘像素靠它和背景过渡。
+ */
+static uint16_t blend565(uint16_t dst, uint16_t src, float a)
 {
-    if (y < 0 || y >= c->height) return;
+    if (a >= 0.996f) return src;
+    if (a <= 0.004f) return dst;
+    const int dr = (dst >> 11) & 0x1F, dg = (dst >> 5) & 0x3F, db = dst & 0x1F;
+    const int sr = (src >> 11) & 0x1F, sg = (src >> 5) & 0x3F, sb = src & 0x1F;
+    const int r = dr + (int)lroundf((float)(sr - dr) * a);
+    const int g = dg + (int)lroundf((float)(sg - dg) * a);
+    const int b = db + (int)lroundf((float)(sb - db) * a);
+    return (uint16_t)((r << 11) | (g << 5) | b);
+}
+
+/*
+ * 凸四边形填充，**带抗锯齿**。
+ *
+ * 这是"动作看着假"的真正原因，比曲线本身重要得多：
+ * 整像素填充时，一条 2 单位宽的手臂在旋转过程中边缘只能一格一格地跳，
+ * 于是每帧都在"啪"地挪一整个像素——曲线再准，画出来也是硬跳。
+ * 人眼对边缘的亚像素位移极其敏感，抗锯齿一开，同样的关键帧立刻就"活"了。
+ *
+ * 做法：纵向 4 次子采样求每行的覆盖跨度，横向用精确的分数覆盖率，
+ * 然后和已有像素混色。代价是每个四边形多几倍的算术，
+ * 但精灵总共才十来个四边形，换来的平滑度完全值得。
+ */
+#define AA_SUBROWS 3
+static float s_cov[640];
+
+/** 一维覆盖率：区间 [lo,hi] 落在整数格 i 上的比例。 */
+static inline float span_cov(float lo, float hi, int i)
+{
+    const float l = lo > (float)i ? lo : (float)i;
+    const float r = hi < (float)(i + 1) ? hi : (float)(i + 1);
+    return r > l ? r - l : 0.0f;
+}
+
+/*
+ * 轴对齐矩形的快速路径。
+ *
+ * **躯干和腿占了绝大部分像素，而它们多数时候根本没有旋转。**
+ * 对这些矩形做逐行子采样纯属浪费——横竖两个方向各算一次分数覆盖率，
+ * 乘起来就是精确解，既没有采样误差又快得多。
+ */
+static bool fill_axis_rect(const clawd_canvas_t *c, const pt_t q[4], uint16_t color)
+{
+    const float eps = 0.02f;
+    if (fabsf(q[0].y - q[1].y) > eps || fabsf(q[2].y - q[3].y) > eps ||
+        fabsf(q[0].x - q[3].x) > eps || fabsf(q[1].x - q[2].x) > eps) {
+        return false;
+    }
+    float lox = q[0].x, hix = q[1].x, loy = q[0].y, hiy = q[2].y;
+    if (hix < lox) { const float t = lox; lox = hix; hix = t; }
+    if (hiy < loy) { const float t = loy; loy = hiy; hiy = t; }
+
+    int y0 = (int)floorf(loy), y1 = (int)ceilf(hiy);
+    int x0 = (int)floorf(lox), x1 = (int)ceilf(hix);
+    if (y0 < 0) y0 = 0;
     if (x0 < 0) x0 = 0;
-    if (x1 > c->width - 1) x1 = c->width - 1;
-    if (x0 > x1) return;
-    uint16_t *line = c->pixels + (size_t)y * c->width;
-    for (int x = x0; x <= x1; x++) line[x] = color;
+    if (y1 > c->height) y1 = c->height;
+    if (x1 > c->width) x1 = c->width;
+    if (y1 <= y0 || x1 <= x0) return true;
+
+    for (int y = y0; y < y1; y++) {
+        const float vy = span_cov(loy, hiy, y);
+        if (vy <= 0.004f) continue;
+        uint16_t *row = c->pixels + (size_t)y * c->width;
+        if (vy > 0.996f) {
+            /* 整行覆盖：中间整格直接写，只有左右两端要混色 */
+            for (int x = x0; x < x1; x++) {
+                const float a = span_cov(lox, hix, x);
+                if (a <= 0.004f) continue;
+                row[x] = (a > 0.996f) ? color : blend565(row[x], color, a);
+            }
+            continue;
+        }
+        for (int x = x0; x < x1; x++) {
+            const float a = vy * span_cov(lox, hix, x);
+            if (a <= 0.004f) continue;
+            row[x] = blend565(row[x], color, a > 1.0f ? 1.0f : a);
+        }
+    }
+    return true;
 }
 
 static void fill_quad(const clawd_canvas_t *c, const pt_t q[4], uint16_t color)
 {
-    float min_y = q[0].y, max_y = q[0].y;
+    if (fill_axis_rect(c, q, color)) return;
+    float miny = q[0].y, maxy = q[0].y, minx = q[0].x, maxx = q[0].x;
     for (int i = 1; i < 4; i++) {
-        if (q[i].y < min_y) min_y = q[i].y;
-        if (q[i].y > max_y) max_y = q[i].y;
+        if (q[i].y < miny) miny = q[i].y;
+        if (q[i].y > maxy) maxy = q[i].y;
+        if (q[i].x < minx) minx = q[i].x;
+        if (q[i].x > maxx) maxx = q[i].x;
     }
-    int y0 = (int)floorf(min_y);
-    int y1 = (int)ceilf(max_y);
-    if (y1 < 0 || y0 > c->height - 1) return;
+    int y0 = (int)floorf(miny), y1 = (int)ceilf(maxy);
+    int x0 = (int)floorf(minx), x1 = (int)ceilf(maxx);
     if (y0 < 0) y0 = 0;
-    if (y1 > c->height - 1) y1 = c->height - 1;
+    if (x0 < 0) x0 = 0;
+    if (y1 > c->height) y1 = c->height;
+    if (x1 > c->width) x1 = c->width;
+    if (y1 <= y0 || x1 <= x0) return;
+    if (x1 - x0 > (int)(sizeof(s_cov) / sizeof(s_cov[0]))) x1 = x0 + (int)(sizeof(s_cov) / sizeof(s_cov[0]));
 
-    for (int y = y0; y <= y1; y++) {
-        const float sy = (float)y + 0.5f;
-        float xs[4];
-        int n = 0;
-        for (int i = 0; i < 4 && n < 4; i++) {
-            const pt_t a = q[i];
-            const pt_t b = q[(i + 1) & 3];
-            if ((a.y <= sy && b.y > sy) || (b.y <= sy && a.y > sy)) {
-                const float t = (sy - a.y) / (b.y - a.y);
-                xs[n++] = a.x + t * (b.x - a.x);
+    const float share = 1.0f / (float)AA_SUBROWS;
+
+    for (int y = y0; y < y1; y++) {
+        for (int i = x0; i < x1; i++) s_cov[i - x0] = 0.0f;
+        bool any = false;
+
+        for (int sub = 0; sub < AA_SUBROWS; sub++) {
+            const float sy = (float)y + ((float)sub + 0.5f) * share;
+
+            /* 凸多边形与一条水平线最多交于一个区间，取交点的最小/最大即可 */
+            float lo = 1e9f, hi = -1e9f;
+            for (int e = 0; e < 4; e++) {
+                const pt_t *p = &q[e];
+                const pt_t *n = &q[(e + 1) & 3];
+                if ((p->y <= sy) == (n->y <= sy)) continue;
+                const float dy = n->y - p->y;
+                if (dy == 0.0f) continue;
+                const float x = p->x + (n->x - p->x) * (sy - p->y) / dy;
+                if (x < lo) lo = x;
+                if (x > hi) hi = x;
+            }
+            if (hi <= lo) continue;
+            if (lo < (float)x0) lo = (float)x0;
+            if (hi > (float)x1) hi = (float)x1;
+            if (hi <= lo) continue;
+            any = true;
+
+            /* 横向精确覆盖率：两端按分数计，中间整格 */
+            const int ilo = (int)floorf(lo), ihi = (int)ceilf(hi);
+            for (int x = ilo; x < ihi && x < x1; x++) {
+                if (x < x0) continue;
+                s_cov[x - x0] += span_cov(lo, hi, x) * share;
             }
         }
-        if (n < 2) continue;
-        float lo = xs[0], hi = xs[0];
-        for (int i = 1; i < n; i++) {
-            if (xs[i] < lo) lo = xs[i];
-            if (xs[i] > hi) hi = xs[i];
+        if (!any) continue;
+
+        uint16_t *row = c->pixels + (size_t)y * c->width;
+        for (int x = x0; x < x1; x++) {
+            const float a = s_cov[x - x0];
+            if (a <= 0.004f) continue;
+            row[x] = blend565(row[x], color, a > 1.0f ? 1.0f : a);
         }
-        put_span(c, y, (int)floorf(lo), (int)ceilf(hi) - 1, color);
     }
 }
 
@@ -212,78 +317,131 @@ static void transform_rect(const view_t *v, const rect_t *r, float pivot_x, floa
 
 
 /* ------------------------------------------------------------------ *
- * 干活时的道具：键盘 + 按键闪烁 + 数据粒子
+ * 小道具
  *
- * 只有身体在抖是不够的——**"在敲键盘"这件事需要键盘本身在场**。
- * 官方 clawd-working-typing.svg 里键盘画在腿的前面、手臂的后面，
- * 于是双手正好落在键帽上；6 个按键闪烁用互质的周期，
- * 看起来就是没有规律地噼里啪啦，这点不规则才是"在打字"的观感来源。
+ * **不画大件家具。** 试过在腿前面摆一块整幅宽的键盘，结果就是一根丑陋的
+ * 灰色横条把人物腰斩——15x16 的格子里塞不下一张桌子，塞进去只会盖住角色本身。
+ * 道具要小、要在人物轮廓之外、要能一眼读懂：火花、灯泡、Z。
  * ------------------------------------------------------------------ */
 
-#define KB_COL clawd_rgb565(0x45, 0x5A, 0x64)
-#define KEY_COL clawd_rgb565(0x78, 0x90, 0x9C)
-#define KEY_HIT_COL clawd_rgb565(0xCF, 0xD8, 0xDC)
 #define BIT_COL clawd_rgb565(0x40, 0xC4, 0xFF)
+#define SPARK_A clawd_rgb565(0xFF, 0xD7, 0x00)
+#define SPARK_B clawd_rgb565(0xFF, 0xF5, 0x9D)
+#define BULB_ON clawd_rgb565(0xFF, 0xD4, 0x00)
+#define BULB_OFF clawd_rgb565(0x8A, 0x74, 0x28)
+#define BULB_EDGE_ON clawd_rgb565(0xFF, 0xB0, 0x00)
+#define BULB_EDGE_OFF clawd_rgb565(0x72, 0x5B, 0x20)
+#define ZZZ_COL clawd_rgb565(0xB0, 0xBE, 0xC5)
 
-#define KB_KEYS 7
-static const rect_t R_KEYBOARD = {-0.5f, 12.9f, 16.0f, 2.5f};
-
-/* 6 个按键的闪烁周期与相位，全部互质——规律一旦对齐就立刻假了 */
-static const uint32_t KEY_PERIOD[6] = {600, 800, 500, 700, 550, 900};
-static const uint32_t KEY_OFFSET[6] = {0, 250, 100, 450, 300, 500};
-/* 哪些键帽会闪：{行, 列} */
-static const int KEY_HIT[6][2] = {{0, 1}, {0, 4}, {1, 2}, {1, 5}, {0, 6}, {1, 0}};
-
-/* 数据粒子：从身体两侧升起，填掉人物上方的空档 */
-#define BIT_COUNT 4
-static const float BIT_X[BIT_COUNT] = {-1.3f, 15.4f, -1.0f, 15.1f};
-static const uint32_t BIT_DELAY[BIT_COUNT] = {0, 400, 800, 1200};
-#define BIT_PERIOD 1600
-#define BIT_Y_LO 8.2f
-#define BIT_Y_HI 4.3f
-
-static void draw_working_props(const clawd_canvas_t *canvas, const view_t *v, uint32_t t,
-                               float bdy)
+static void put_unit_rect(const clawd_canvas_t *canvas, const view_t *v, float x, float y,
+                          float w, float h, float bdy, uint16_t color)
 {
     pt_t quad[4];
+    const rect_t r = {x, y, w, h};
+    transform_rect(v, &r, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, bdy, quad);
+    fill_quad(canvas, quad, color);
+}
 
-    /* 键盘底板 */
-    transform_rect(v, &R_KEYBOARD, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, bdy, quad);
-    fill_quad(canvas, quad, KB_COL);
+/* --- 干活：思绪从头顶飘出去 --- */
+#define BIT_COUNT 4
+static const float BIT_X[BIT_COUNT] = {-1.4f, 15.6f, -0.9f, 15.1f};
+static const uint32_t BIT_DELAY[BIT_COUNT] = {0, 500, 1000, 1500};
+#define BIT_PERIOD 2000
 
-    /* 两排键帽 */
-    const float kw = 1.75f, kh = 0.7f, gap = 0.35f;
-    const float x0 = R_KEYBOARD.x + 0.45f;
-    for (int row = 0; row < 2; row++) {
-        for (int col = 0; col < KB_KEYS; col++) {
-            rect_t key = {x0 + (float)col * (kw + gap), 13.25f + (float)row * 1.0f, kw, kh};
-
-            uint16_t col16 = KEY_COL;
-            for (int k = 0; k < 6; k++) {
-                if (KEY_HIT[k][0] != row || KEY_HIT[k][1] != col) continue;
-                const uint32_t ph = (t + KEY_OFFSET[k]) % KEY_PERIOD[k];
-                /* 只在周期的一小段亮起——按下去是"一下"，不是"一半时间" */
-                if (ph < KEY_PERIOD[k] / 5) col16 = KEY_HIT_COL;
-            }
-            transform_rect(v, &key, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, bdy, quad);
-            fill_quad(canvas, quad, col16);
-        }
-    }
-
-    /* 数据粒子：升起 + 由小变大，到顶消失 */
+static void props_working(const clawd_canvas_t *canvas, const view_t *v, uint32_t t, float bdy)
+{
     for (int i = 0; i < BIT_COUNT; i++) {
         const uint32_t ph = (t + BIT_DELAY[i]) % BIT_PERIOD;
         const float f = (float)ph / (float)BIT_PERIOD;
-        /* 头尾各留 15% 做淡入淡出——这里没有透明度，就用尺寸代替 */
-        float sz = 0.85f;
-        if (f < 0.15f) sz *= f / 0.15f;
-        else if (f > 0.8f) sz *= (1.0f - f) / 0.2f;
-        if (sz < 0.15f) continue;
+        float sz = 0.8f;
+        if (f < 0.2f) sz *= f / 0.2f;
+        else if (f > 0.75f) sz *= (1.0f - f) / 0.25f;
+        if (sz < 0.2f) continue;
+        const float y = 9.0f + (4.0f - 9.0f) * f;
+        put_unit_rect(canvas, v, BIT_X[i] - sz * 0.5f, y - sz * 0.5f, sz, sz, bdy, BIT_COL);
+    }
+}
 
-        const float y = BIT_Y_LO + (BIT_Y_HI - BIT_Y_LO) * f;
-        rect_t bit = {BIT_X[i] - sz * 0.5f, y - sz * 0.5f, sz, sz};
-        transform_rect(v, &bit, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, bdy, quad);
-        fill_quad(canvas, quad, BIT_COL);
+/* --- 完成：四周迸出火花 --- */
+#define SPARK_COUNT 6
+static const float SPARK_X[SPARK_COUNT] = {-1.6f, 16.6f, 16.2f, -1.2f, 7.5f, -0.8f};
+static const float SPARK_Y[SPARK_COUNT] = {5.2f, 4.6f, 11.0f, 12.0f, 3.6f, 8.4f};
+static const uint32_t SPARK_DELAY[SPARK_COUNT] = {0, 250, 500, 750, 1000, 580};
+#define SPARK_PERIOD 1500
+
+static void props_done(const clawd_canvas_t *canvas, const view_t *v, uint32_t t, float bdy)
+{
+    for (int i = 0; i < SPARK_COUNT; i++) {
+        const uint32_t ph = (t + SPARK_DELAY[i]) % SPARK_PERIOD;
+        /* 十字火花分两拍：先亮中心一点，再迸出四条短臂，然后整个消失。
+         * 这个两拍结构比"整颗一起闪"生动得多，官方也是这么拆的。 */
+        const uint16_t col = (i & 1) ? SPARK_B : SPARK_A;
+        const float u = 0.42f;
+        if (ph < 220) {
+            put_unit_rect(canvas, v, SPARK_X[i] - u * 0.5f, SPARK_Y[i] - u * 0.5f, u, u, bdy, col);
+        } else if (ph < 480) {
+            put_unit_rect(canvas, v, SPARK_X[i] - u * 0.5f, SPARK_Y[i] - u * 1.9f, u, u, bdy, col);
+            put_unit_rect(canvas, v, SPARK_X[i] - u * 0.5f, SPARK_Y[i] + u * 0.9f, u, u, bdy, col);
+            put_unit_rect(canvas, v, SPARK_X[i] - u * 1.9f, SPARK_Y[i] - u * 0.5f, u, u, bdy, col);
+            put_unit_rect(canvas, v, SPARK_X[i] + u * 0.9f, SPARK_Y[i] - u * 0.5f, u, u, bdy, col);
+        }
+    }
+}
+
+/* --- 等待输入：头顶举起的灯泡 + 一闪一闪的光线 --- */
+static void props_waiting(const clawd_canvas_t *canvas, const view_t *v, uint32_t t, float bdy,
+                          float lift)
+{
+    const float ph = (float)(t % 6000) / 6000.0f;
+    if (ph < 0.11f || ph > 0.70f) return; /* 灯泡只在举起的那段出现 */
+
+    const bool lit = (ph >= 0.20f);
+    const float cx = 14.0f, cy = 5.2f + lift;
+
+    /* 灯泡：玻璃泡 + 灯头，亮起时换色。像素画，不做渐变。 */
+    put_unit_rect(canvas, v, cx - 1.1f, cy - 1.1f, 2.2f, 1.9f, bdy,
+                  lit ? BULB_ON : BULB_OFF);
+    put_unit_rect(canvas, v, cx - 0.55f, cy + 0.8f, 1.1f, 0.7f, bdy,
+                  lit ? BULB_EDGE_ON : BULB_EDGE_OFF);
+
+    if (!lit) return;
+    /* 光线：按不规则节拍闪。规则闪烁看着像故障灯，不规则才像"灵光一现"。 */
+    const uint32_t beat = (t % 1000);
+    if (beat > 620) return;
+    const float len = 1.0f, w = 0.34f;
+    put_unit_rect(canvas, v, cx - w * 0.5f, cy - 2.6f, w, len, bdy, BULB_ON);
+    put_unit_rect(canvas, v, cx - 2.6f, cy - w * 0.5f, len, w, bdy, BULB_ON);
+    put_unit_rect(canvas, v, cx + 1.6f, cy - w * 0.5f, len, w, bdy, BULB_ON);
+    put_unit_rect(canvas, v, cx - 2.1f, cy - 2.1f, 0.7f, 0.7f, bdy, BULB_ON);
+    put_unit_rect(canvas, v, cx + 1.5f, cy - 2.1f, 0.7f, 0.7f, bdy, BULB_ON);
+}
+
+/* --- 睡觉：飘起来的 Z --- */
+static void draw_pixel_z(const clawd_canvas_t *canvas, const view_t *v, float x, float y,
+                         float u, float bdy, uint16_t col)
+{
+    put_unit_rect(canvas, v, x, y, u * 4.0f, u, bdy, col);            /* 上横 */
+    put_unit_rect(canvas, v, x + u * 2.0f, y + u, u, u, bdy, col);    /* 斜 */
+    put_unit_rect(canvas, v, x + u, y + u * 2.0f, u, u, bdy, col);    /* 斜 */
+    put_unit_rect(canvas, v, x, y + u * 3.0f, u * 4.0f, u, bdy, col); /* 下横 */
+}
+
+#define Z_COUNT 3
+static const uint32_t Z_DELAY[Z_COUNT] = {0, 2000, 4000};
+#define Z_PERIOD 6000
+
+static void props_sleeping(const clawd_canvas_t *canvas, const view_t *v, uint32_t t, float bdy)
+{
+    for (int i = 0; i < Z_COUNT; i++) {
+        const uint32_t ph = (t + Z_DELAY[i]) % Z_PERIOD;
+        const float f = (float)ph / (float)Z_PERIOD;
+        if (f > 0.9f) continue;
+        /* 一边飘一边左右摆，越飘越大——直着往上走看着像字幕，摆起来才像气泡 */
+        const float sway = sinf(f * 6.28318f * 1.5f) * 1.2f;
+        const float x = 11.0f + sway;
+        const float y = 9.5f - f * 5.2f;
+        const float u = 0.22f + f * 0.20f;
+        draw_pixel_z(canvas, v, x, y, u, bdy, ZZZ_COL);
     }
 }
 
@@ -321,12 +479,18 @@ static void apply_breathe_and_blink(pose_t *p, uint32_t t)
 static void pose_working(pose_t *p, uint32_t t)
 {
     static const key_t BOUNCE[] = {{0.0f, 0.0f}, {0.5f, 0.8f}, {1.0f, 0.0f}};
-    p->body_dy = ease_keys(BOUNCE, 3, phase_of(t, 350)) * 0.06f;
+    p->body_dy = ease_keys(BOUNCE, 3, phase_of(t, 700)) * 0.06f;
 
     static const key_t TYPE[] = {
         {0.00f, -5.0f}, {0.25f, -38.0f}, {0.50f, -10.0f}, {0.75f, -30.0f}, {1.00f, -5.0f}};
-    p->arm_l_rot = ease_keys(TYPE, 5, phase_of(t, 150)) * (float)M_PI / 180.0f;
-    p->arm_r_rot = -ease_keys(TYPE, 5, phase_of(t, 120)) * (float)M_PI / 180.0f;
+    /*
+     * **周期不能比帧间隔短太多。** 官方是 120/150ms，那是 60fps 浏览器里的数；
+     * 这块板子 30fps，120ms 一个周期只采到 3~4 帧，动作直接被采样打碎成抖动——
+     * 不是"在打字"，是"在哆嗦"。放慢到 360/300ms，一个周期有 10 帧上下，
+     * 敲击的起落才看得出来。两个周期仍然互质，双手依旧不同步。
+     */
+    p->arm_l_rot = ease_keys(TYPE, 5, phase_of(t, 360)) * (float)M_PI / 180.0f;
+    p->arm_r_rot = -ease_keys(TYPE, 5, phase_of(t, 300)) * (float)M_PI / 180.0f;
 
     static const key_t SHADOW[] = {{0.0f, 1.02f}, {0.5f, 1.05f}, {1.0f, 1.02f}};
     p->shadow_sx = ease_keys(SHADOW, 3, phase_of(t, 400));
@@ -393,7 +557,7 @@ static void pose_done(pose_t *p, uint32_t t)
 
     /* 双臂 150ms 交替挥动 45°↔85° */
     static const key_t WAVE[] = {{0.0f, 45.0f}, {0.5f, 85.0f}, {1.0f, 45.0f}};
-    const float wave = ease_keys(WAVE, 3, phase_of(t, 150)) * (float)M_PI / 180.0f;
+    const float wave = ease_keys(WAVE, 3, phase_of(t, 320)) * (float)M_PI / 180.0f;
     p->arm_l_rot = -wave;
     p->arm_r_rot = wave;
 
@@ -604,9 +768,6 @@ void clawd_draw(const clawd_canvas_t *canvas, const clawd_draw_t *p)
     BODY_XFORM(torso);
     fill_quad(canvas, quad, p->body_color);
 
-    /* 键盘画在腿和躯干之上、手臂之下——双手才会落在键帽上 */
-    if (p->state == CLAWD_WORKING) draw_working_props(canvas, &view, p->elapsed_ms, bdy);
-
     /* 双臂 */
     if (pose.body_form == 2) {
         /* 睡姿的手是摊在地上的，跟着身体一起缩放，不单独旋转 */
@@ -665,6 +826,15 @@ void clawd_draw(const clawd_canvas_t *canvas, const clawd_draw_t *p)
         transform_rect(&view, &er, BODY_PIVOT_X, BODY_PIVOT_Y, pose.body_rot, pose.body_sx,
                        pose.body_sy, bdx, bdy, quad);
         fill_quad(canvas, quad, p->eye_color);
+    }
+
+    /* 道具画在最后：它们都在人物轮廓之外，不会被身体盖住 */
+    switch (p->state) {
+        case CLAWD_WORKING: props_working(canvas, &view, p->elapsed_ms, bdy); break;
+        case CLAWD_DONE: props_done(canvas, &view, p->elapsed_ms, bdy); break;
+        case CLAWD_WAITING: props_waiting(canvas, &view, p->elapsed_ms, bdy, pose.arm_r_dy); break;
+        case CLAWD_SLEEPING: props_sleeping(canvas, &view, p->elapsed_ms, bdy); break;
+        default: break;
     }
 
 #undef BODY_XFORM

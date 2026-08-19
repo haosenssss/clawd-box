@@ -40,17 +40,13 @@ static void format_countdown(char *out, size_t n, int64_t resets_at, int64_t now
     const int64_t days = left / 86400;
     const int64_t hours = left / 3600;
     const int64_t mins = (left % 3600) / 60;
-    if (days > 0) {
-        /* 周额度剩几天就够了，精确到小时没有决策价值 */
-        snprintf(out, n, "%lldd", (long long)days);
-    } else if (hours > 0) {
-        /* 5 小时窗口要看到分钟——"还有 2 小时"和"还有 2 小时 55 分"
-         * 是两个不同的决定。写成 2:45 而不是 2h45m，同样的信息少一个字符，
-         * 省下来的横向空间全归了上面的图形。 */
-        snprintf(out, n, "%lld:%02lld", (long long)hours, (long long)mins);
-    } else {
-        snprintf(out, n, "%lldm", (long long)mins + 1);
-    }
+    /* d / h / m 的倒计时写法，最长五个字符（2h45m）。
+     * 右侧那一列的宽度就是按这个上限定的——它反过来卡住了图形能多宽。 */
+    const int64_t rem_h = (left % 86400) / 3600;
+    if (days > 0 && rem_h > 0)  snprintf(out, n, "%lldd%lldh", (long long)days, (long long)rem_h);
+    else if (days > 0)          snprintf(out, n, "%lldd", (long long)days);
+    else if (hours > 0)         snprintf(out, n, "%lldh%lldm", (long long)hours, (long long)mins);
+    else                        snprintf(out, n, "%lldm", (long long)mins + 1);
 }
 
 /**
@@ -59,23 +55,24 @@ static void format_countdown(char *out, size_t n, int64_t resets_at, int64_t now
  * 不做保护就会画到屏幕外。
  */
 /**
- * 项目名：放得下就一行，放不下就**折成两行**，字号不变。
+ * 项目名：**优先把字号做大，放不下就折行，最后才缩字号**。
  *
- * 原来的做法是一路降字号，结果 "clawd-hardware-status-panel" 这种长名
- * 会缩到根本看不清——横屏就那么宽，靠缩字是解决不了的。
- * 折行在分隔符（- / _ / .）处断，断点取最接近中点的那个，两行才均衡；
- * 找不到分隔符才按字符硬断。两行还放不下才降字号，最后才截断。
+ * 顺序很关键。原来是"放不下就缩"，于是长项目名一路缩到看不清；
+ * 现在是先在大字号上试折行——两行大字远比一行小字好读。
+ * 折行在分隔符（- / _ / .）处断，断点取最接近中点的那个，两行才均衡。
  */
 static void draw_name(const text_canvas_t *tc, int cx, int y, int line_h, const char *s,
-                      int max_w, int scale, uint16_t color)
+                      int max_w, int max_scale, uint16_t color)
 {
-    if (text_width(s, scale) <= max_w) {
-        text_draw_center(tc, cx, y + line_h / 2, s, scale, color);
+    /* 1) 一行放得下：用能放下的最大字号，并在两行的位置里居中 */
+    for (int sc = max_scale; sc >= 1; sc--) {
+        if (text_width(s, sc) > max_w) continue;
+        text_draw_center(tc, cx, y + line_h / 2, s, sc, color);
         return;
     }
 
+    /* 断点：所有分隔符里最接近中点的那个 */
     const int len = (int)strlen(s);
-    /* 断点候选：所有分隔符，挑离中点最近的 */
     int split = -1, best = len;
     for (int i = 1; i < len - 1; i++) {
         if (s[i] != '-' && s[i] != '_' && s[i] != '.') continue;
@@ -84,37 +81,27 @@ static void draw_name(const text_canvas_t *tc, int cx, int y, int line_h, const 
     }
     if (split < 0) split = len / 2; /* 没有分隔符就硬断 */
 
-    char a[40], b[40];
+    char a[48], b[48];
     int na = split < (int)sizeof(a) - 1 ? split : (int)sizeof(a) - 1;
     memcpy(a, s, (size_t)na);
     a[na] = '\0';
-    /* 断在分隔符上时，分隔符留给上一行行尾更好读 */
-    const int start = (s[split] == '-' || s[split] == '_' || s[split] == '.') ? split : split;
-    snprintf(b, sizeof(b), "%s", s + start);
+    snprintf(b, sizeof(b), "%s", s + split);
 
-    if (text_width(a, scale) <= max_w && text_width(b, scale) <= max_w) {
-        text_draw_center(tc, cx, y, a, scale, color);
-        text_draw_center(tc, cx, y + line_h, b, scale, color);
+    /* 2) 两行：同样先试最大字号 */
+    for (int sc = max_scale; sc >= 1; sc--) {
+        if (text_width(a, sc) > max_w || text_width(b, sc) > max_w) continue;
+        text_draw_center(tc, cx, y, a, sc, color);
+        text_draw_center(tc, cx, y + line_h, b, sc, color);
         return;
     }
 
-    /* 两行还是超宽：降一档字号再试 */
-    const int sm = scale > 1 ? scale - 1 : scale;
-    if (text_width(a, sm) <= max_w && text_width(b, sm) <= max_w) {
-        text_draw_center(tc, cx, y, a, sm, color);
-        text_draw_center(tc, cx, y + line_h, b, sm, color);
-        return;
-    }
-
-    /* 最后手段：截断第二行 */
-    const int per = TEXT_ADVANCE(sm);
-    int fit = (max_w - text_width("..", sm)) / per;
+    /* 3) 最小字号还超宽：截断第二行 */
+    const int per = TEXT_ADVANCE(1);
+    int fit = (max_w - text_width("..", 1)) / per;
     if (fit < 1) fit = 1;
-    if (fit < (int)strlen(b)) {
-        b[fit] = '.'; b[fit + 1] = '.'; b[fit + 2] = '\0';
-    }
-    text_draw_center(tc, cx, y, a, sm, color);
-    text_draw_center(tc, cx, y + line_h, b, sm, color);
+    if (fit < (int)strlen(b)) { b[fit] = '.'; b[fit + 1] = '.'; b[fit + 2] = '\0'; }
+    text_draw_center(tc, cx, y, a, 1, color);
+    text_draw_center(tc, cx, y + line_h, b, 1, color);
 }
 
 /* ------------------------------------------------------------------ */
@@ -305,12 +292,12 @@ void session_page_draw(uint16_t *fb, const text_canvas_t *tc, const model_t *m,
         const bool running = (state == CLAWD_WORKING || state == CLAWD_WAITING ||
                               state == CLAWD_DONE);
         draw_name(tc, BSP_LCD_H_RES / 2, NAME_Y, NAME_LINE_H, focus->name, BSP_LCD_H_RES - 40,
-                        TEXT_SCALE, COL_TEXT);
+                  NAME_SCALE, COL_TEXT);
         text_draw_center(tc, BSP_LCD_H_RES / 2, VERB_Y, verb,
                         TEXT_SCALE, running ? COL_TEXT : COL_VERB);
     } else {
         draw_name(tc, BSP_LCD_H_RES / 2, NAME_Y, NAME_LINE_H, "no active session",
-                  BSP_LCD_H_RES - 40, TEXT_SCALE, COL_VERB);
+                  BSP_LCD_H_RES - 40, NAME_SCALE, COL_VERB);
     }
 
     /* 底部四条等距 */
