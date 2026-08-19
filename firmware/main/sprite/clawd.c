@@ -412,11 +412,11 @@ static void put_unit_quad(const clawd_canvas_t *canvas, const view_t *v, const f
 
 /* 屏幕：立在远边上。上沿更宽（朝观众倒）且整体右偏（四分之三视角） */
 #define MAC_LID_BOT_Y 12.55f
-#define MAC_LID_TOP_Y 11.05f
-#define MAC_LID_BOT_X0 4.60f
-#define MAC_LID_BOT_X1 10.30f
-#define MAC_LID_TOP_X0 4.85f
-#define MAC_LID_TOP_X1 11.60f
+#define MAC_LID_TOP_Y 10.70f
+#define MAC_LID_BOT_X0 4.55f
+#define MAC_LID_BOT_X1 10.35f
+#define MAC_LID_TOP_X0 5.35f
+#define MAC_LID_TOP_X1 10.75f
 
 /**
  * 笔记本电脑：一个**斜着放**的平面 L。
@@ -431,16 +431,18 @@ static void put_unit_quad(const clawd_canvas_t *canvas, const view_t *v, const f
  *    上沿相对下沿往右偏一点，变成四分之三视角，
  *    既让出左边的脸，又立刻有了"摆在桌上"的随意感。
  *
- * 3. 屏幕**上宽下窄**——它朝观众这侧倒，上沿离我们更近所以更宽。
+ * 3. **屏幕上窄下宽。** 深度顺序是：观众 → 屏幕背面 → 转轴 → 键盘面 → 它的手 → 它。
+ *    屏幕是朝角色打开的，也就是朝远处倒，那么上沿比下沿远，透视上就该更窄。
+ *    我先前做成上宽，等于让屏幕朝观众倒——那样它就背对着自己的使用者了。
  *
- * 说明"它在工作"的仍是上沿溢出的那道光：手臂压低时亮一下。
+ * 4. **屏幕必须矮。** 一台笔记本的屏幕高度大约等于键盘面的进深，
+ *    再高就成了台式显示器。而且眼睛在 8..10，上沿压到 10.7 以下脸才完全露出来。
  */
 static void props_macbook(const clawd_canvas_t *canvas, const view_t *v, float bdy,
                           float arm_l_rot, float arm_r_rot)
 {
-    const float dl = arm_l_rot < 0.0f ? (-arm_l_rot) / 0.66f : 0.0f;
-    const float dr = arm_r_rot > 0.0f ? (arm_r_rot) / 0.66f : 0.0f;
-    const bool bright = (dl > dr ? dl : dr) > 0.55f;
+    (void)arm_l_rot;
+    (void)arm_r_rot;
 
     /* 机身：近边宽、远边窄的梯形 = 一张朝远处收进去的桌面 */
     put_unit_quad(canvas, v,
@@ -464,20 +466,15 @@ static void props_macbook(const clawd_canvas_t *canvas, const view_t *v, float b
                   (const float[]){MAC_LID_TOP_Y, MAC_LID_TOP_Y, MAC_LID_BOT_Y, MAC_LID_BOT_Y},
                   bdy, AL_MID);
 
-    /* 顶边高光 + 溢出的屏幕光 */
+    /* 顶边一条亮线：屏幕边框的高光。不画发光——纯黑背景上那道光
+     * 只会变成一条突兀的白杠，反而把这台小机器的形压散了。 */
     put_unit_quad(canvas, v,
-                  (const float[]){MAC_LID_TOP_X0, MAC_LID_TOP_X1, MAC_LID_TOP_X1 - 0.06f,
-                                  MAC_LID_TOP_X0 + 0.06f},
-                  (const float[]){MAC_LID_TOP_Y, MAC_LID_TOP_Y, MAC_LID_TOP_Y + 0.17f,
-                                  MAC_LID_TOP_Y + 0.17f},
+                  (const float[]){MAC_LID_TOP_X0, MAC_LID_TOP_X1, MAC_LID_TOP_X1 - 0.05f,
+                                  MAC_LID_TOP_X0 + 0.05f},
+                  (const float[]){MAC_LID_TOP_Y, MAC_LID_TOP_Y, MAC_LID_TOP_Y + 0.18f,
+                                  MAC_LID_TOP_Y + 0.18f},
                   bdy, AL_HI);
-    const float g = bright ? 0.26f : 0.15f;
-    put_unit_quad(canvas, v,
-                  (const float[]){MAC_LID_TOP_X0 + 0.2f, MAC_LID_TOP_X1 - 0.2f,
-                                  MAC_LID_TOP_X1 - 0.25f, MAC_LID_TOP_X0 + 0.25f},
-                  (const float[]){MAC_LID_TOP_Y - g, MAC_LID_TOP_Y - g, MAC_LID_TOP_Y,
-                                  MAC_LID_TOP_Y},
-                  bdy, bright ? SCREEN_GLOW : SCREEN_GLOW_DIM);
+
 }
 
 /* --- 干活：思绪从头顶飘出去 --- */
