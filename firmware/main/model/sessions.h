@@ -108,5 +108,19 @@ session_t *model_ring_at(model_t *m, int index, uint32_t now_ms);
  */
 session_t *model_sole_busy(model_t *m, uint32_t now_ms);
 
+/** 第 index 个已登记会话（含空闲的）。管理页用，与轮播环无关。 */
+session_t *model_at(model_t *m, int index);
+
+/*
+ * 退避式重复提醒。
+ *
+ * **视觉和听觉是分开的**：等待输入的动作一直循环播放，永不衰减；
+ * 这里管的只是"什么时候再响一次"。0 / 30s / 1m / 2m / 5m，之后每 5 分钟，
+ * 不再拉长——一个你没处理的等待状态不该被系统悄悄放弃。
+ */
+bool model_reminder_due(session_t *s, uint32_t now_ms);
+/** 确认：不再出声。**视觉状态照旧**，状态本身消失才算完。 */
+void model_reminder_ack(session_t *s);
+
 /** 会话当前应该演哪个动作。 */
 clawd_state_t model_clawd_state(const session_t *s, uint32_t now_ms);

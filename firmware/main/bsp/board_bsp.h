@@ -24,6 +24,15 @@ esp_io_expander_handle_t bsp_io_expander(void);
 /** 读 AXP2101 电池电压（毫伏）。失败返回 0。 */
 uint16_t bsp_battery_millivolts(void);
 
+/**
+ * 直接读写 AXP2101 寄存器。
+ *
+ * 只用于读中断状态位（PWR 键按下），**不碰任何电轨或关机相关寄存器**。
+ * 长按关机由 PMU 硬件自己处理，读写中断状态不会影响它。
+ */
+esp_err_t bsp_pmic_read_reg(uint8_t reg, uint8_t *value);
+esp_err_t bsp_pmic_write_reg(uint8_t reg, uint8_t value);
+
 /* ---------------- 显示 ---------------- */
 
 /** 初始化 ST7701 + RGB 面板。调用前必须先 bsp_board_init()。 */

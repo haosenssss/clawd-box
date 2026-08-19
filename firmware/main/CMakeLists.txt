@@ -7,12 +7,18 @@ idf_component_register(
         "sprite/text.c"
         "model/sessions.c"
         "link/link.c"
+        "bsp/bsp_touch.c"
+        "input/input.c"
+        "ui/pages.c"
+        "ui/pager.c"
     INCLUDE_DIRS
         "."
         "bsp"
         "sprite"
         "model"
         "link"
+        "input"
+        "ui"
     REQUIRES
         driver
         esp_lcd

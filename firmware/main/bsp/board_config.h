@@ -13,13 +13,16 @@
 #define BSP_I2C_SDA GPIO_NUM_47
 #define BSP_I2C_SCL GPIO_NUM_48
 
-/* 实测地址。注意 GT911 与 QMI8658 用的都是**备选地址**，不是常见默认值。 */
+/* 实测地址。QMI8658 用的是备选地址，不是常见默认值。 */
 #define BSP_ADDR_ES8311 0x18
 #define BSP_ADDR_TCA9554 0x20
 #define BSP_ADDR_AXP2101 0x34
 #define BSP_ADDR_ES7210 0x40
 #define BSP_ADDR_PCF85063 0x51 /* RTC，出货固件未使用 */
-#define BSP_ADDR_GT911 0x14    /* ⚠ 不是默认的 0x5D */
+/* GT911 的地址由复位时 INT 电平决定，0x5D / 0x14 都可能。
+ * 这里只是**首选探测值**，bsp_touch 会两个都探——写死任何一个都会在
+ * 某次上电顺序变化后失效。详见 docs/gotchas.md #6。 */
+#define BSP_ADDR_GT911 0x5D
 #define BSP_ADDR_QMI8658 0x6B  /* ⚠ 不是默认的 0x6A，出货固件未使用 */
 
 /* ---------------- 显示：ST7701 480x480 RGB 并口 ---------------- */

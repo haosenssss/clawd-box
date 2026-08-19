@@ -195,6 +195,43 @@ session_t *model_ring_at(model_t *m, int index, uint32_t now_ms)
     return NULL;
 }
 
+session_t *model_at(model_t *m, int index)
+{
+    int n = 0;
+    for (int i = 0; i < MAX_SESSIONS; i++) {
+        if (!m->sessions[i].used) continue;
+        if (n == index) return &m->sessions[i];
+        n++;
+    }
+    return NULL;
+}
+
+/* 退避档位：进入等待立即响一次，之后间隔逐级拉长，封顶 5 分钟 */
+static const uint32_t REMIND_GAP_MS[] = {0, 30000, 60000, 120000, 300000};
+#define REMIND_STEPS (sizeof(REMIND_GAP_MS) / sizeof(REMIND_GAP_MS[0]))
+
+bool model_reminder_due(session_t *s, uint32_t now_ms)
+{
+    if (s == NULL || s->status != SESS_WAITING || s->remind_acked) return false;
+
+    if (s->last_remind_ms == 0) { /* 刚进入等待，立即响 */
+        s->last_remind_ms = now_ms;
+        s->remind_step = 1;
+        return true;
+    }
+    const uint8_t idx = s->remind_step < REMIND_STEPS ? s->remind_step : REMIND_STEPS - 1;
+    if ((uint32_t)(now_ms - s->last_remind_ms) < REMIND_GAP_MS[idx]) return false;
+
+    s->last_remind_ms = now_ms;
+    if (s->remind_step < REMIND_STEPS - 1) s->remind_step++;
+    return true;
+}
+
+void model_reminder_ack(session_t *s)
+{
+    if (s != NULL) s->remind_acked = true;
+}
+
 session_t *model_sole_busy(model_t *m, uint32_t now_ms)
 {
     session_t *found = NULL;

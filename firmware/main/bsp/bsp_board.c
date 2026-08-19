@@ -58,6 +58,18 @@ static esp_err_t pmic_read(uint8_t reg, uint8_t *value)
     return i2c_master_transmit_receive(s_pmic, &reg, 1, value, 1, I2C_TIMEOUT_MS);
 }
 
+esp_err_t bsp_pmic_read_reg(uint8_t reg, uint8_t *value)
+{
+    if (s_pmic == NULL) return ESP_ERR_INVALID_STATE;
+    return pmic_read(reg, value);
+}
+
+esp_err_t bsp_pmic_write_reg(uint8_t reg, uint8_t value)
+{
+    if (s_pmic == NULL) return ESP_ERR_INVALID_STATE;
+    return pmic_write(reg, value);
+}
+
 /*
  * AXP2101 配置。序列与出货固件一致——这不是随意的默认值，
  * 而是这块板子实际的电轨拓扑（只用 DC1 供主轨，ALDO1 供麦克风）。
