@@ -1,0 +1,16 @@
+{
+  "name": "clawd-box-host",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Mac 侧守护进程：把 Claude Code 的会话状态与限额推给 ESP32-S3 状态面板",
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "test": "bun test",
+    "typecheck": "bunx tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.6.0"
+  }
+}

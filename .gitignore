@@ -1,0 +1,20 @@
+node_modules/
+bun.lock
+bun.lockb
+
+# 出厂固件备份体积大（16MB），不进版本库；SHA256 已记在 docs/pinout.md
+backup/*.bin
+
+# ESP-IDF 构建产物
+firmware/build/
+firmware/sdkconfig
+firmware/sdkconfig.old
+firmware/managed_components/
+firmware/dependencies.lock
+
+.DS_Store
+
+# 编辑器/工具缓存
+firmware/.cache/
+.vscode/
+compile_commands.json

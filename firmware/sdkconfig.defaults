@@ -1,0 +1,27 @@
+# ---- 目标与 flash ----
+# eFuse 实测：quad(4 数据线)、3.3V、16MB
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+
+# ---- PSRAM ----
+# esptool 实测：Embedded PSRAM 8MB (AP_3v3) => ESP32-S3R8 => octal
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_MALLOC=y
+
+# ---- CPU ----
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
+# ---- 日志 ----
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# ---- 串口输出走 UART0（板子是 CH343P 桥接，不是原生 USB）----
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+
+# ---- UART 中断放进 IRAM ----
+# 渲染循环每秒 30 次密集读写 PSRAM，cache miss 期间非 IRAM 的中断会被延迟，
+# UART 硬件 FIFO（128B）来不及排空就丢字节。实测症状：单帧从不出错，
+# 但 resync 一次性连发 6~7 帧时必然粘连丢中段。
+CONFIG_UART_ISR_IN_IRAM=y

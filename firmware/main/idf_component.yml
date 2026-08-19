@@ -1,0 +1,18 @@
+dependencies:
+  idf: ">=5.5"
+
+  # ST7701 面板驱动。版本对齐出货固件（xiaozhi v1.8.5）所用，避免 API 漂移。
+  espressif/esp_lcd_st7701: "^2.0.2"
+
+  # TCA9554 IO 扩展器——本板的 LCD 复位和 ST7701 的 3-wire SPI 都挂在它后面
+  espressif/esp_io_expander_tca9554: "~2.0.3"
+
+  # 提供 esp_lcd_new_panel_io_3wire_spi：把 SPI 时序打在 IO 扩展器引脚上
+  espressif/esp_lcd_panel_io_additions: "^1.0.1"
+
+  # 电容触摸
+  espressif/esp_lcd_touch_gt911: "^1.1.0"
+
+  # UI
+  lvgl/lvgl: "^9.2.0"
+  espressif/esp_lvgl_port: "^2.4.0"

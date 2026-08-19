@@ -1,0 +1,22 @@
+idf_component_register(
+    SRCS
+        "main.c"
+        "bsp/bsp_board.c"
+        "bsp/bsp_display.c"
+        "sprite/clawd.c"
+        "sprite/text.c"
+        "model/sessions.c"
+        "link/link.c"
+    INCLUDE_DIRS
+        "."
+        "bsp"
+        "sprite"
+        "model"
+        "link"
+    REQUIRES
+        driver
+        esp_lcd
+        esp_psram
+        esp_timer
+        json
+)
