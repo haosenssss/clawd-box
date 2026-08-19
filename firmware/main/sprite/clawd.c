@@ -333,6 +333,34 @@ static void transform_rect(const view_t *v, const rect_t *r, float pivot_x, floa
 #define BULB_EDGE_OFF clawd_rgb565(0x72, 0x5B, 0x20)
 #define ZZZ_COL clawd_rgb565(0xB0, 0xBE, 0xC5)
 
+/** 抗锯齿的圆。泡泡、火花这类小圆件用它，方块拼出来的圆在这个尺度上很硬。 */
+static void put_unit_circle(const clawd_canvas_t *canvas, const view_t *v, float cx, float cy,
+                            float r, float bdy, uint16_t color)
+{
+    const pt_t c = to_px(v, cx, cy + bdy);
+    const float pr = r * v->scale;
+    if (pr <= 0.3f) return;
+    int y0 = (int)floorf(c.y - pr), y1 = (int)ceilf(c.y + pr);
+    int x0 = (int)floorf(c.x - pr), x1 = (int)ceilf(c.x + pr);
+    if (y0 < 0) y0 = 0;
+    if (x0 < 0) x0 = 0;
+    if (y1 > canvas->height) y1 = canvas->height;
+    if (x1 > canvas->width) x1 = canvas->width;
+
+    for (int y = y0; y < y1; y++) {
+        uint16_t *row = canvas->pixels + (size_t)y * canvas->width;
+        for (int x = x0; x < x1; x++) {
+            const float dx = (float)x + 0.5f - c.x;
+            const float dy = (float)y + 0.5f - c.y;
+            const float d = sqrtf(dx * dx + dy * dy);
+            /* 边缘一个像素内做线性过渡，就足够消掉锯齿 */
+            const float a = pr - d + 0.5f;
+            if (a <= 0.0f) continue;
+            row[x] = blend565(row[x], color, a > 1.0f ? 1.0f : a);
+        }
+    }
+}
+
 static void put_unit_rect(const clawd_canvas_t *canvas, const view_t *v, float x, float y,
                           float w, float h, float bdy, uint16_t color)
 {
@@ -342,52 +370,98 @@ static void put_unit_rect(const clawd_canvas_t *canvas, const view_t *v, float x
     fill_quad(canvas, quad, color);
 }
 
+/** 任意四边形（单位坐标）。梯形要靠它——transform_rect 只能给出平行四边形。 */
+static void put_unit_quad(const clawd_canvas_t *canvas, const view_t *v, const float xs[4],
+                          const float ys[4], float bdy, uint16_t color)
+{
+    pt_t q[4];
+    for (int i = 0; i < 4; i++) q[i] = to_px(v, xs[i], ys[i] + bdy);
+    fill_quad(canvas, q, color);
+}
+
 /* --- 干活：一张有厚度的小键盘 + 与手臂同相的按键 --- */
 
-#define KB_TOP clawd_rgb565(0x5A, 0x6B, 0x76)   /* 顶面，偏亮 */
-#define KB_FRONT clawd_rgb565(0x33, 0x42, 0x4A) /* 前沿，压暗做出厚度 */
-#define KEY_IDLE clawd_rgb565(0x8C, 0xA0, 0xAB)
-#define KEY_DOWN clawd_rgb565(0xEC, 0xF3, 0xF6)
+/* 铝合金的三档明暗。金属感全靠这三条带子的排布，不靠渐变——
+ * 这个尺度上一像素一档就够读出"是块金属板"。 */
+#define AL_HI clawd_rgb565(0xC6, 0xCD, 0xD3)
+#define AL_MID clawd_rgb565(0x9E, 0xA6, 0xAD)
+#define AL_LO clawd_rgb565(0x74, 0x7C, 0x84)
+#define AL_EDGE clawd_rgb565(0x50, 0x58, 0x5F)
+/* 屏幕漏出来的光。偏冷偏亮，和精灵的暖橙形成对比，画面才有层次。 */
+#define SCREEN_GLOW clawd_rgb565(0xD6, 0xE6, 0xF6)
+#define SCREEN_GLOW_DIM clawd_rgb565(0x6E, 0x86, 0xA0)
 
-#define KB_X 2.4f
-#define KB_W 10.2f
-#define KB_TOP_Y 13.15f
-#define KB_TOP_H 1.15f
-#define KB_FRONT_H 0.5f
-#define KB_COLS 6
+#define MAC_BASE_Y 14.30f
+#define MAC_BASE_H 0.62f
+#define MAC_BASE_X 1.35f
+#define MAC_BASE_W 12.30f
+#define MAC_LID_BOT_Y 14.30f
+#define MAC_LID_TOP_Y 11.35f
+#define MAC_LID_BOT_X0 2.00f
+#define MAC_LID_BOT_X1 13.00f
+#define MAC_LID_TOP_X0 2.38f
+#define MAC_LID_TOP_X1 12.62f
 
 /**
- * 键盘。
+ * 一台从背面看的笔记本。
  *
- * 之前那版是整幅宽的一块灰板，把人物腰斩，很丑。要点有三个：
- *   1. **窄**——只比身体略宽，它是个道具不是布景
- *   2. **有厚度**——顶面偏亮、前沿压暗，两条色带就够读出立体
- *   3. **按键和手臂同相**——左手压到最低时左边的键才亮。
- *      原来按键各闪各的，看着是一排随机跳的灯，不是有人在敲。
- *      因果关系对上了，"在打字"这件事才成立。
+ * 构图上这是最省事也最好看的一种：**屏幕背对我们**，
+ * 于是不用画任何界面内容，只有一块梯形的合金 A 面；
+ * 真正说明"它在工作"的是**从上沿溢出来的屏幕光**。
+ * 手臂搭在上沿之外还看得见，敲击的起落就有了着落点。
+ *
+ * 梯形（上窄下宽）是关键：矩形读作"一块板子"，
+ * 梯形才读作"一块朝我们倾斜的板子"。
  */
-static void props_keyboard(const clawd_canvas_t *canvas, const view_t *v, float bdy,
-                           float arm_l_rot, float arm_r_rot)
+static void props_macbook(const clawd_canvas_t *canvas, const view_t *v, float bdy,
+                          float arm_l_rot, float arm_r_rot)
 {
-    put_unit_rect(canvas, v, KB_X, KB_TOP_Y, KB_W, KB_TOP_H, bdy, KB_TOP);
-    put_unit_rect(canvas, v, KB_X, KB_TOP_Y + KB_TOP_H, KB_W, KB_FRONT_H, bdy, KB_FRONT);
-
-    /* 手臂转到越负越靠下 = 正在按下。归一到 0..1 的"按压深度"。 */
+    /* 手臂压得越低 = 敲得越实，屏幕光跟着亮一下 */
     const float dl = arm_l_rot < 0.0f ? (-arm_l_rot) / 0.66f : 0.0f;
     const float dr = arm_r_rot > 0.0f ? (arm_r_rot) / 0.66f : 0.0f;
+    const float hit = dl > dr ? dl : dr;
 
-    const float kw = KB_W / (float)KB_COLS * 0.72f;
-    const float gap = KB_W / (float)KB_COLS;
-    for (int col = 0; col < KB_COLS; col++) {
-        const float x = KB_X + 0.16f + (float)col * gap;
-        /* 左半边归左手管，右半边归右手管 */
-        const float depth = (col < KB_COLS / 2) ? dl : dr;
-        const bool down = depth > 0.62f;
-        /* 按下的键往下沉一点点——纯换色是平的，位移才有手感 */
-        const float sink = down ? 0.12f : 0.0f;
-        put_unit_rect(canvas, v, x, KB_TOP_Y + 0.22f + sink, kw, 0.42f, bdy,
-                      down ? KEY_DOWN : KEY_IDLE);
+    /* 1) 屏幕光：先画，让它被后面的 A 面盖住下半，只在上沿露出来一条 */
+    const bool bright = hit > 0.55f;
+    const float halo = bright ? 0.62f : 0.42f;
+    put_unit_quad(canvas, v,
+                  (const float[]){MAC_LID_TOP_X0 - 0.5f, MAC_LID_TOP_X1 + 0.5f,
+                                  MAC_LID_TOP_X1 + 0.2f, MAC_LID_TOP_X0 - 0.2f},
+                  (const float[]){MAC_LID_TOP_Y - halo, MAC_LID_TOP_Y - halo,
+                                  MAC_LID_TOP_Y + 0.35f, MAC_LID_TOP_Y + 0.35f},
+                  bdy, bright ? SCREEN_GLOW : SCREEN_GLOW_DIM);
+
+    /* 2) A 面：上窄下宽的梯形，三条明暗带做出金属的反光 */
+    const float bands[4] = {MAC_LID_TOP_Y, MAC_LID_TOP_Y + 0.9f, MAC_LID_TOP_Y + 2.0f,
+                            MAC_LID_BOT_Y};
+    const uint16_t band_col[3] = {AL_MID, AL_HI, AL_LO};
+    for (int i = 0; i < 3; i++) {
+        const float t0 = (bands[i] - MAC_LID_TOP_Y) / (MAC_LID_BOT_Y - MAC_LID_TOP_Y);
+        const float t1 = (bands[i + 1] - MAC_LID_TOP_Y) / (MAC_LID_BOT_Y - MAC_LID_TOP_Y);
+        const float x00 = MAC_LID_TOP_X0 + (MAC_LID_BOT_X0 - MAC_LID_TOP_X0) * t0;
+        const float x01 = MAC_LID_TOP_X1 + (MAC_LID_BOT_X1 - MAC_LID_TOP_X1) * t0;
+        const float x10 = MAC_LID_TOP_X0 + (MAC_LID_BOT_X0 - MAC_LID_TOP_X0) * t1;
+        const float x11 = MAC_LID_TOP_X1 + (MAC_LID_BOT_X1 - MAC_LID_TOP_X1) * t1;
+        put_unit_quad(canvas, v, (const float[]){x00, x01, x11, x10},
+                      (const float[]){bands[i], bands[i], bands[i + 1], bands[i + 1]}, bdy,
+                      band_col[i]);
     }
+    /* 上沿一条亮边 = 屏幕边框的高光，一像素就够 */
+    put_unit_quad(canvas, v,
+                  (const float[]){MAC_LID_TOP_X0, MAC_LID_TOP_X1, MAC_LID_TOP_X1 - 0.02f,
+                                  MAC_LID_TOP_X0 + 0.02f},
+                  (const float[]){MAC_LID_TOP_Y, MAC_LID_TOP_Y, MAC_LID_TOP_Y + 0.16f,
+                                  MAC_LID_TOP_Y + 0.16f},
+                  bdy, AL_HI);
+
+    /* 3) 机身：一条薄板 + 更暗的前沿，压住整台机器的重量 */
+    put_unit_rect(canvas, v, MAC_BASE_X, MAC_BASE_Y, MAC_BASE_W, MAC_BASE_H * 0.55f, bdy,
+                  AL_HI);
+    put_unit_rect(canvas, v, MAC_BASE_X, MAC_BASE_Y + MAC_BASE_H * 0.55f, MAC_BASE_W,
+                  MAC_BASE_H * 0.45f, bdy, AL_LO);
+    /* 底部一道暗线把机器和地面分开 */
+    put_unit_rect(canvas, v, MAC_BASE_X, MAC_BASE_Y + MAC_BASE_H, MAC_BASE_W, 0.14f, bdy,
+                  AL_EDGE);
 }
 
 /* --- 干活：思绪从头顶飘出去 --- */
@@ -417,23 +491,69 @@ static const float SPARK_Y[SPARK_COUNT] = {5.2f, 4.6f, 11.0f, 12.0f, 3.6f, 8.4f}
 static const uint32_t SPARK_DELAY[SPARK_COUNT] = {0, 250, 500, 750, 1000, 580};
 #define SPARK_PERIOD 1500
 
+#define CONFETTI_COUNT 10
+static const float CONF_X[CONFETTI_COUNT] = {0.5f, 3.0f, 5.5f, 8.0f, 10.5f,
+                                             13.0f, 1.8f, 6.8f, 11.8f, 14.4f};
+static const uint32_t CONF_DELAY[CONFETTI_COUNT] = {0,   140, 280, 420, 560,
+                                                    700, 840, 980, 1120, 1260};
+static const uint16_t CONF_COL[4] = {0, 0, 0, 0}; /* 运行时填，见下 */
+
+/*
+ * 完成：一场小型狂欢。
+ *
+ * 三层叠在一起才够"大胆"：
+ *   1. **顶点爆环**——只在滞空最高点迸发。定时闪的火花跟跳跃没关系，
+ *      看着就是背景装饰；卡在顶点上，它才是这一跳"炸出来"的
+ *   2. **彩纸下落**——横向铺开、错峰、边落边摆，把整个画面填满
+ *   3. **常驻火花**——补在四角，让空档期也不冷场
+ */
 static void props_done(const clawd_canvas_t *canvas, const view_t *v, uint32_t t, float bdy)
 {
+    const uint32_t ph1s = t % 1000; /* 与 pose_done 的 1s 跳跃周期同相 */
+
+    /* 1) 顶点爆环：40%~60% 是滞空段，50% 是最高点 */
+    if (ph1s >= 380 && ph1s < 660) {
+        const float k = (float)(ph1s - 380) / 280.0f;
+        const float r = 3.2f + k * 5.0f;      /* 向外扩张 */
+        const float dot = 0.42f * (1.0f - k); /* 越扩越细，自然消散 */
+        if (dot > 0.06f) {
+            for (int i = 0; i < 10; i++) {
+                const float ang = (float)i * 0.6283185f;
+                const float x = 7.5f + cosf(ang) * r;
+                const float y = 9.0f + sinf(ang) * r * 0.62f;
+                put_unit_circle(canvas, v, x, y, dot, bdy, (i & 1) ? SPARK_A : SPARK_B);
+            }
+        }
+    }
+
+    /* 2) 彩纸：从画面上方落下，边落边横向摆 */
+    for (int i = 0; i < CONFETTI_COUNT; i++) {
+        const uint32_t cp = (t + CONF_DELAY[i] * 3) % 2600;
+        const float f = (float)cp / 2600.0f;
+        const float y = 3.4f + f * 13.0f;
+        if (y > 15.6f) continue;
+        const float sway = sinf(f * 6.28318f * 2.0f + (float)i) * 0.55f;
+        /* 翻转：宽度随相位收缩再张开，像纸片在翻面 */
+        const float w = 0.22f + 0.34f * fabsf(cosf(f * 6.28318f * 3.0f + (float)i));
+        const uint16_t col = (i % 3 == 0) ? SPARK_A : ((i % 3 == 1) ? SPARK_B : BIT_COL);
+        put_unit_rect(canvas, v, CONF_X[i] + sway, y, w, 0.30f, bdy, col);
+    }
+
+    /* 3) 常驻火花：两拍结构——先亮中心，再迸四臂 */
     for (int i = 0; i < SPARK_COUNT; i++) {
-        const uint32_t ph = (t + SPARK_DELAY[i]) % SPARK_PERIOD;
-        /* 十字火花分两拍：先亮中心一点，再迸出四条短臂，然后整个消失。
-         * 这个两拍结构比"整颗一起闪"生动得多，官方也是这么拆的。 */
+        const uint32_t sp = (t + SPARK_DELAY[i]) % SPARK_PERIOD;
         const uint16_t col = (i & 1) ? SPARK_B : SPARK_A;
-        const float u = 0.42f;
-        if (ph < 220) {
-            put_unit_rect(canvas, v, SPARK_X[i] - u * 0.5f, SPARK_Y[i] - u * 0.5f, u, u, bdy, col);
-        } else if (ph < 480) {
+        const float u = 0.40f;
+        if (sp < 200) {
+            put_unit_circle(canvas, v, SPARK_X[i], SPARK_Y[i], u * 0.6f, bdy, col);
+        } else if (sp < 460) {
             put_unit_rect(canvas, v, SPARK_X[i] - u * 0.5f, SPARK_Y[i] - u * 1.9f, u, u, bdy, col);
             put_unit_rect(canvas, v, SPARK_X[i] - u * 0.5f, SPARK_Y[i] + u * 0.9f, u, u, bdy, col);
             put_unit_rect(canvas, v, SPARK_X[i] - u * 1.9f, SPARK_Y[i] - u * 0.5f, u, u, bdy, col);
             put_unit_rect(canvas, v, SPARK_X[i] + u * 0.9f, SPARK_Y[i] - u * 0.5f, u, u, bdy, col);
         }
     }
+    (void)CONF_COL;
 }
 
 /* --- 等待输入：头顶举起的灯泡 + 一闪一闪的光线 --- */
@@ -480,6 +600,32 @@ static const uint32_t Z_DELAY[Z_COUNT] = {0, 2000, 4000};
 
 static void props_sleeping(const clawd_canvas_t *canvas, const view_t *v, uint32_t t, float bdy)
 {
+    /*
+     * 嘴边的呼吸泡泡：跟着呼吸鼓起来，鼓到最大就啵一下破掉，然后重来。
+     * 周期和 pose_sleeping 的 4.5s 呼吸**严格同相**——泡泡自己有节奏的话
+     * 就成了两个不相干的动画摆在一起；同相了才是"它在呼吸"。
+     */
+    const float bp = (float)(t % 4500) / 4500.0f;
+    if (bp < 0.86f) {
+        const float grow = bp / 0.86f;
+        const float r = 0.18f + grow * grow * 0.85f; /* 先慢后快，像真的在被吹大 */
+        put_unit_circle(canvas, v, 15.1f, 12.4f, r, bdy, ZZZ_COL);
+        /* 高光：一颗偏上的小亮点，泡泡才不像实心球 */
+        if (r > 0.45f) {
+            put_unit_circle(canvas, v, 15.1f - r * 0.32f, 12.4f - r * 0.34f, r * 0.22f, bdy,
+                            clawd_rgb565(0xF0, 0xF4, 0xF6));
+        }
+    } else if (bp < 0.91f) {
+        /* 破掉的一瞬：几个碎点向外散 */
+        const float k = (bp - 0.86f) / 0.05f;
+        for (int i = 0; i < 5; i++) {
+            const float ang = (float)i * 1.2566f;
+            put_unit_circle(canvas, v, 15.1f + cosf(ang) * (0.9f + k * 0.9f),
+                            12.4f + sinf(ang) * (0.9f + k * 0.9f), 0.16f * (1.0f - k), bdy,
+                            ZZZ_COL);
+        }
+    }
+
     for (int i = 0; i < Z_COUNT; i++) {
         const uint32_t ph = (t + Z_DELAY[i]) % Z_PERIOD;
         const float f = (float)ph / (float)Z_PERIOD;
@@ -816,10 +962,6 @@ void clawd_draw(const clawd_canvas_t *canvas, const clawd_draw_t *p)
     BODY_XFORM(torso);
     fill_quad(canvas, quad, p->body_color);
 
-    /* 键盘画在躯干之上、手臂之下——手才会落在键上 */
-    if (p->state == CLAWD_WORKING) {
-        props_keyboard(canvas, &view, bdy, pose.arm_l_rot, pose.arm_r_rot);
-    }
 
     /* 双臂 */
     if (pose.body_form == 2) {
@@ -879,6 +1021,12 @@ void clawd_draw(const clawd_canvas_t *canvas, const clawd_draw_t *p)
         transform_rect(&view, &er, BODY_PIVOT_X, BODY_PIVOT_Y, pose.body_rot, pose.body_sx,
                        pose.body_sy, bdx, bdy, quad);
         fill_quad(canvas, quad, p->eye_color);
+    }
+
+    /* 笔记本画在**手臂之后**：手搭在上沿之外还看得见，
+     * 屏幕和身体的下半则被它挡住——这正是从背后看一个人用电脑的样子。 */
+    if (p->state == CLAWD_WORKING) {
+        props_macbook(canvas, &view, bdy, pose.arm_l_rot, pose.arm_r_rot);
     }
 
     /* 道具画在最后：它们都在人物轮廓之外，不会被身体盖住 */
