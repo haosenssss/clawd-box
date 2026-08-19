@@ -402,30 +402,38 @@ static void put_unit_quad(const clawd_canvas_t *canvas, const view_t *v, const f
  * 缩到 5.5 个单位宽、放在正中偏下，两侧的腿露出来，
  * 观众才读得出"角色坐在电脑后面"这个空间关系。
  */
-#define MAC_BASE_Y 12.75f
-#define MAC_BASE_H 0.52f
-#define MAC_BASE_X 3.55f
-#define MAC_BASE_W 7.90f
-#define MAC_LID_BOT_Y 12.75f
-#define MAC_LID_TOP_Y 10.75f
-#define MAC_LID_BOT_X0 4.35f
-#define MAC_LID_BOT_X1 10.65f
-#define MAC_LID_TOP_X0 3.75f
-#define MAC_LID_TOP_X1 11.25f
+/* 桌面：近边（下）宽、远边（上）窄——朝远处收进去 */
+#define MAC_DECK_NEAR_Y 13.55f
+#define MAC_DECK_FAR_Y 12.55f
+#define MAC_DECK_NEAR_X0 3.30f
+#define MAC_DECK_NEAR_X1 11.20f
+#define MAC_DECK_FAR_X0 4.55f
+#define MAC_DECK_FAR_X1 10.35f
+
+/* 屏幕：立在远边上。上沿更宽（朝观众倒）且整体右偏（四分之三视角） */
+#define MAC_LID_BOT_Y 12.55f
+#define MAC_LID_TOP_Y 11.05f
+#define MAC_LID_BOT_X0 4.60f
+#define MAC_LID_BOT_X1 10.30f
+#define MAC_LID_TOP_X0 4.85f
+#define MAC_LID_TOP_X1 11.60f
 
 /**
- * 笔记本电脑：**一个平面的 L**。
+ * 笔记本电脑：一个**斜着放**的平面 L。
  *
- * 之前画成三层明暗带的梯形 + 宽底座，结果读出来是台打字机——
- * 层次越多越像一个带键盘的方盒子。笔记本的辨识度全在**侧影**上：
- * 一竖（屏幕）加一横（机身），就这两笔。
+ * 三处此前做错的地方：
  *
- * 所以这里只有两个矩形：竖的屏幕背板、横的机身，加一条顶边高光。
- * 屏幕**上宽下窄**：它是朝观众这一侧倒过来的，上沿离我们更近所以更宽。
- * 反过来做（上窄下宽）就成了朝角色那边倒，看着像屏幕背对着他自己。
- * 高度卡在**眼睛下沿之下**：眼睛在 8..10，屏幕上沿再高就把脸挡住了，
- * 那就成了"人躲在电脑后面"。机身横在 12.75，手臂放下来正好够得着。
- * 说明"它在工作"的仍然是上沿溢出的那道光——手臂压低时亮一下。
+ * 1. **机身要往屏幕里收，不是往外伸。** 桌面是朝远处铺开的，
+ *    所以近边（下沿）宽、远边（上沿）窄，屏幕立在那条远边上。
+ *    做成一根等宽的横条就成了"贴在画面上的一块板"，没有纵深。
+ *
+ * 2. **不能摆正。** 正对观众时它是一堵墙，把整张脸糊住。
+ *    上沿相对下沿往右偏一点，变成四分之三视角，
+ *    既让出左边的脸，又立刻有了"摆在桌上"的随意感。
+ *
+ * 3. 屏幕**上宽下窄**——它朝观众这侧倒，上沿离我们更近所以更宽。
+ *
+ * 说明"它在工作"的仍是上沿溢出的那道光：手臂压低时亮一下。
  */
 static void props_macbook(const clawd_canvas_t *canvas, const view_t *v, float bdy,
                           float arm_l_rot, float arm_r_rot)
@@ -434,24 +442,42 @@ static void props_macbook(const clawd_canvas_t *canvas, const view_t *v, float b
     const float dr = arm_r_rot > 0.0f ? (arm_r_rot) / 0.66f : 0.0f;
     const bool bright = (dl > dr ? dl : dr) > 0.55f;
 
-    /* 屏幕背板：一竖。上沿略窄 = 朝观众方向敞开着。 */
+    /* 机身：近边宽、远边窄的梯形 = 一张朝远处收进去的桌面 */
+    put_unit_quad(canvas, v,
+                  (const float[]){MAC_DECK_FAR_X0, MAC_DECK_FAR_X1, MAC_DECK_NEAR_X1,
+                                  MAC_DECK_NEAR_X0},
+                  (const float[]){MAC_DECK_FAR_Y, MAC_DECK_FAR_Y, MAC_DECK_NEAR_Y,
+                                  MAC_DECK_NEAR_Y},
+                  bdy, AL_HI);
+    /* 近边一条暗线收口，桌面才有厚度 */
+    put_unit_quad(canvas, v,
+                  (const float[]){MAC_DECK_NEAR_X0, MAC_DECK_NEAR_X1, MAC_DECK_NEAR_X1,
+                                  MAC_DECK_NEAR_X0},
+                  (const float[]){MAC_DECK_NEAR_Y, MAC_DECK_NEAR_Y, MAC_DECK_NEAR_Y + 0.22f,
+                                  MAC_DECK_NEAR_Y + 0.22f},
+                  bdy, AL_EDGE);
+
+    /* 屏幕：立在远边上，上宽下窄且整体右偏 = 四分之三视角 */
     put_unit_quad(canvas, v,
                   (const float[]){MAC_LID_TOP_X0, MAC_LID_TOP_X1, MAC_LID_BOT_X1,
                                   MAC_LID_BOT_X0},
                   (const float[]){MAC_LID_TOP_Y, MAC_LID_TOP_Y, MAC_LID_BOT_Y, MAC_LID_BOT_Y},
                   bdy, AL_MID);
 
-    /* 顶边：一条亮线是边框，上面一条更亮的是漏出来的屏幕光 */
-    put_unit_rect(canvas, v, MAC_LID_TOP_X0, MAC_LID_TOP_Y, MAC_LID_TOP_X1 - MAC_LID_TOP_X0,
-                  0.16f, bdy, AL_HI);
-    put_unit_rect(canvas, v, MAC_LID_TOP_X0 + 0.15f, MAC_LID_TOP_Y - (bright ? 0.26f : 0.15f),
-                  MAC_LID_TOP_X1 - MAC_LID_TOP_X0 - 0.3f, bright ? 0.26f : 0.15f, bdy,
-                  bright ? SCREEN_GLOW : SCREEN_GLOW_DIM);
-
-    /* 机身：一横。比屏幕宽，L 才立得住。 */
-    put_unit_rect(canvas, v, MAC_BASE_X, MAC_BASE_Y, MAC_BASE_W, MAC_BASE_H, bdy, AL_HI);
-    put_unit_rect(canvas, v, MAC_BASE_X, MAC_BASE_Y + MAC_BASE_H, MAC_BASE_W, 0.20f, bdy,
-                  AL_EDGE);
+    /* 顶边高光 + 溢出的屏幕光 */
+    put_unit_quad(canvas, v,
+                  (const float[]){MAC_LID_TOP_X0, MAC_LID_TOP_X1, MAC_LID_TOP_X1 - 0.06f,
+                                  MAC_LID_TOP_X0 + 0.06f},
+                  (const float[]){MAC_LID_TOP_Y, MAC_LID_TOP_Y, MAC_LID_TOP_Y + 0.17f,
+                                  MAC_LID_TOP_Y + 0.17f},
+                  bdy, AL_HI);
+    const float g = bright ? 0.26f : 0.15f;
+    put_unit_quad(canvas, v,
+                  (const float[]){MAC_LID_TOP_X0 + 0.2f, MAC_LID_TOP_X1 - 0.2f,
+                                  MAC_LID_TOP_X1 - 0.25f, MAC_LID_TOP_X0 + 0.25f},
+                  (const float[]){MAC_LID_TOP_Y - g, MAC_LID_TOP_Y - g, MAC_LID_TOP_Y,
+                                  MAC_LID_TOP_Y},
+                  bdy, bright ? SCREEN_GLOW : SCREEN_GLOW_DIM);
 }
 
 /* --- 干活：思绪从头顶飘出去 --- */
@@ -617,8 +643,10 @@ static void props_sleeping(const clawd_canvas_t *canvas, const view_t *v, uint32
     if (bp < 0.86f) {
         const float grow = bp / 0.86f;
         const float r = 0.16f + grow * grow * 1.05f; /* 先慢后快，像真的在被吹大 */
-        const float cx = nose_x + r * 0.62f;
-        const float cy = nose_y + r * 0.30f;
+        /* **往一边吹。** 正对着鼓出来像颗贴在脸上的球；
+         * 侧着吹才是"气从鼻孔斜着顶出去"，也才看得出方向。 */
+        const float cx = nose_x + r * 1.15f;
+        const float cy = nose_y + r * 0.12f;
         put_unit_circle(canvas, v, cx, cy, r, bdy, ZZZ_COL);
         if (r > 0.40f) {
             put_unit_circle(canvas, v, cx - r * 0.34f, cy - r * 0.36f, r * 0.26f, bdy,
