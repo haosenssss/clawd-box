@@ -38,6 +38,11 @@ static model_t s_model;
  * 改成：在 scratch 里擦+画，再整块拷过去。拷贝是一次线性写入，
  * 屏幕上看不到黑底中间态。
  */
+/*
+ * 界面静态部分的整屏离屏缓冲。450KB 放 PSRAM——比起"滑动时看到一下整屏黑闪"，
+ * 这点内存完全值得（总共 8MB，帧缓冲自己就占 450KB）。
+ */
+static uint16_t *s_page = NULL;
 static uint16_t *s_scratch = NULL;
 static uint32_t s_frame_ms = 0;
 static bsp_accel_t s_accel_dbg = {0};
@@ -76,6 +81,9 @@ void app_main(void)
      */
     s_scratch_w = (int)((CLAWD_UNIT_W + 4) * SPRITE_SCALE) + 8 + 2 * MOTION_MAX_PX_I;
     s_scratch_h = (int)((10 + 4) * SPRITE_SCALE) + 8 + 2 * MOTION_MAX_PX_I;
+    s_page = heap_caps_malloc((size_t)BSP_LCD_H_RES * BSP_LCD_V_RES * sizeof(uint16_t),
+                              MALLOC_CAP_SPIRAM);
+    ESP_ERROR_CHECK(s_page == NULL ? ESP_ERR_NO_MEM : ESP_OK);
     s_scratch = heap_caps_malloc((size_t)s_scratch_w * s_scratch_h * sizeof(uint16_t),
                                  MALLOC_CAP_SPIRAM);
     ESP_ERROR_CHECK(s_scratch == NULL ? ESP_ERR_NO_MEM : ESP_OK);
@@ -119,8 +127,6 @@ void app_main(void)
             page_changed = true;
         }
         if (page_changed) {
-            /* 换页要整屏擦——两页的版面不一样，残留会叠在一起 */
-            ui_clear_all(fb_main, COL_BG);
             chrome_dirty = 2;
             last_sig = 0;
         }
@@ -138,10 +144,12 @@ void app_main(void)
             session_t *s = model_at(&s_model, i);
             if (s == NULL) break;
             if (model_reminder_due(s, t)) audio_play(SOUND_NEEDS_YOU);
-        }
-        if (focus != NULL && focus->done_pending && !focus->done_chimed) {
-            focus->done_chimed = true;
-            audio_play(SOUND_DONE);
+            /* **任何**会话干完都该出声，不只是当前聚焦的那个——
+             * 你多开终端的意义就在于不用盯着看，声音是唯一的跨页通知。 */
+            if (s->done_pending && !s->done_chimed) {
+                s->done_chimed = true;
+                audio_play(SOUND_DONE);
+            }
         }
         /* 限额告急只在跨过 95% 的那一次响 */
         {
@@ -164,8 +172,6 @@ void app_main(void)
 
         const bool on_session_page = (pager.kind == PAGE_SESSION);
         uint16_t *fb = fb_main;
-        const text_canvas_t tc = {
-            .pixels = fb, .width = BSP_LCD_H_RES, .height = BSP_LCD_V_RES};
         const clawd_draw_t params = {
             .center_x = BSP_LCD_H_RES / 2,
             .baseline_y = SPRITE_BASELINE_Y,
@@ -192,6 +198,38 @@ void app_main(void)
             dy = motion.y;
         }
 
+        /*
+         * 界面静态部分：**整屏离屏合成，再一次线性拷过去**。
+         *
+         * 单帧缓冲 + bounce 模式下写帧缓冲是立即可见的，所以"先擦后画"的
+         * 中间态会被眼睛抓到——滑动换页时那一下黑闪就是整屏擦被看见了。
+         * 在离屏缓冲里擦好画好再整块拷贝，屏幕上就只有前后两个完整画面。
+         */
+        const int64_t now_unix =
+            s_model.host_unix_sec > 0
+                ? s_model.host_unix_sec + (int64_t)((t - s_model.host_sync_ms) / 1000u)
+                : 0;
+        const uint32_t sig = on_session_page
+                                 ? session_page_signature(&s_model, focus, state, t)
+                                 : admin_page_signature(&s_model, now_unix);
+        if (sig != last_sig) {
+            last_sig = sig;
+            chrome_dirty = 1;
+        }
+        if (chrome_dirty > 0) {
+            chrome_dirty--;
+            ui_clear_all(s_page, COL_BG);
+            const text_canvas_t ptc = {
+                .pixels = s_page, .width = BSP_LCD_H_RES, .height = BSP_LCD_V_RES};
+            if (on_session_page) {
+                session_page_draw(s_page, &ptc, &s_model, focus, state, t, now_unix);
+            } else {
+                admin_page_draw(s_page, &ptc, &s_model, t, now_unix);
+            }
+            memcpy(fb, s_page,
+                   (size_t)BSP_LCD_H_RES * BSP_LCD_V_RES * sizeof(uint16_t));
+        }
+
       if (on_session_page) {
         clawd_rect_t box = clawd_bounds(&params);
         /* 静止包围盒向外扩出位移范围，让合成区固定不动 */
@@ -199,8 +237,21 @@ void app_main(void)
         box.y -= MOTION_MAX_PX_I;
         box.w += 2 * MOTION_MAX_PX_I;
         box.h += 2 * MOTION_MAX_PX_I;
+        /*
+         * **合成区必须夹在一条安全带里。**
+         * 它每帧都被整块覆盖，一旦上缘越过 subagent 圆点、下缘压到项目名，
+         * 那两样东西就会被每帧擦掉——表现为"圆点只剩半个""项目名不显示"，
+         * 看起来像绘制没画上去，实际是画上去了又被盖掉。
+         * 越界的部分是包围盒的空白外扩，裁掉不影响人物本身。
+         */
+        if (box.y < SPRITE_BAND_TOP) {
+            box.h -= (SPRITE_BAND_TOP - box.y);
+            box.y = SPRITE_BAND_TOP;
+        }
+        if (box.y + box.h > SPRITE_BAND_BOTTOM) box.h = SPRITE_BAND_BOTTOM - box.y;
         if (box.w > s_scratch_w) box.w = s_scratch_w;
         if (box.h > s_scratch_h) box.h = s_scratch_h;
+        if (box.h <= 0 || box.w <= 0) goto skip_sprite;
 
         /* 1) 在 scratch 里擦干净并画好整块内容 */
         for (int i = 0; i < box.w * box.h; i++) s_scratch[i] = COL_BG;
@@ -224,32 +275,8 @@ void app_main(void)
             memcpy(fb + (size_t)dst_y * BSP_LCD_H_RES + box.x,
                    s_scratch + (size_t)row * box.w, (size_t)box.w * sizeof(uint16_t));
         }
+      skip_sprite:;
       }
-
-        /* 静态部分只在内容变化时重画；两个缓冲各画一次 */
-        const uint32_t now_unix_sig =
-            s_model.host_unix_sec > 0
-                ? s_model.host_unix_sec + (int64_t)((t - s_model.host_sync_ms) / 1000u)
-                : 0;
-        const uint32_t sig = on_session_page
-                                 ? session_page_signature(&s_model, focus, state, t)
-                                 : admin_page_signature(&s_model, now_unix_sig);
-        if (sig != last_sig) {
-            last_sig = sig;
-            chrome_dirty = 2;
-        }
-        if (chrome_dirty > 0) {
-            const int64_t now_unix =
-                s_model.host_unix_sec > 0
-                    ? s_model.host_unix_sec + (int64_t)((t - s_model.host_sync_ms) / 1000u)
-                    : 0;
-            if (on_session_page) {
-                session_page_draw(fb, &tc, &s_model, focus, state, t, now_unix);
-            } else {
-                admin_page_draw(fb, &tc, &s_model, t, now_unix);
-            }
-            chrome_dirty--;
-        }
 
         /* 单帧缓冲 + bounce：写入即显示，不需要 flush/交换 */
 

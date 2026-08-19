@@ -23,6 +23,36 @@ static const rect_t R_LEGS[4] = {
 static const rect_t R_EYE_L = {4.0f, 8.0f, 1.0f, 2.0f};
 static const rect_t R_EYE_R = {10.0f, 8.0f, 1.0f, 2.0f};
 
+/*
+ * **腿的几何是随状态变的，不是固定的。**
+ * 官方每个状态的 SVG 里腿都不一样：站着发呆时腿是加长的（y=11 h=4，
+ * 身体显得立起来、有精神），干活/庆祝时是短腿（y=13 h=2）。
+ * 我一开始全用短腿，结果站姿看着蔫，这是"不可爱"的一大来源。
+ */
+static const rect_t R_LEGS_TALL[4] = {
+    {3.0f, 11.0f, 1.0f, 4.0f},
+    {5.0f, 11.0f, 1.0f, 4.0f},
+    {9.0f, 11.0f, 1.0f, 4.0f},
+    {11.0f, 11.0f, 1.0f, 4.0f},
+};
+
+/*
+ * 睡觉是**另一套完全不同的身体**：摊平的胖躯干、贴地的手、
+ * 从身后翘起的小短腿、两道细线眼。不是"站着的它闭上眼"，
+ * 而是"它化成一摊"——这个姿势本身就是全部的萌点，几何不换就没有。
+ */
+static const rect_t R_SLEEP_TORSO = {1.0f, 10.0f, 13.0f, 5.0f};
+static const rect_t R_SLEEP_ARM_L = {-1.0f, 13.0f, 2.0f, 2.0f};
+static const rect_t R_SLEEP_ARM_R = {14.0f, 13.0f, 2.0f, 2.0f};
+static const rect_t R_SLEEP_LEGS[4] = {
+    {3.0f, 9.0f, 1.0f, 1.0f},
+    {5.0f, 9.0f, 1.0f, 1.0f},
+    {9.0f, 9.0f, 1.0f, 1.0f},
+    {11.0f, 9.0f, 1.0f, 1.0f},
+};
+static const rect_t R_SLEEP_EYE_L = {3.5f, 12.5f, 2.0f, 0.4f};
+static const rect_t R_SLEEP_EYE_R = {9.5f, 12.5f, 2.0f, 0.4f};
+
 /* 手臂旋转的支点在它与身体相接的内侧 */
 static const float ARM_L_PIVOT_X = 2.0f, ARM_L_PIVOT_Y = 10.0f;
 static const float ARM_R_PIVOT_X = 13.0f, ARM_R_PIVOT_Y = 10.0f;
@@ -58,7 +88,7 @@ static float ease_keys(const key_t *keys, size_t n, float phase)
 }
 
 /** step-end：不插值，直接跳变。像素画风格的闪烁/眨眼用它。 */
-static float step_keys(const key_t *keys, size_t n, float phase)
+__attribute__((unused)) static float step_keys(const key_t *keys, size_t n, float phase)
 {
     float v = n > 0 ? keys[0].value : 0.0f;
     for (size_t i = 0; i < n; i++) {
@@ -144,6 +174,11 @@ typedef struct {
     /* 眼睛纵向压缩，1=睁开 0=闭合 */
     float eye_scale_y;
     float eye_dx;
+    float eye_dy;
+    /* 眼睛形态：0=方块眼 1=^^ 笑眼 2=睡觉的细线 */
+    int eye_mode;
+    /* 身体几何：0=常规 1=长腿站姿 2=摊平睡姿 */
+    int body_form;
     /* 影子 */
     float shadow_sx;
     float shadow_alpha; /* 0..1，这里用来在两档颜色间取舍 */
@@ -219,7 +254,35 @@ static void pose_working(pose_t *p, uint32_t t)
     static const key_t SHADOW[] = {{0.0f, 1.02f}, {0.5f, 1.05f}, {1.0f, 1.02f}};
     p->shadow_sx = ease_keys(SHADOW, 3, phase_of(t, 400));
 
-    apply_breathe_and_blink(p, t);
+    /*
+     * **眼睛是眯着的，而且偶尔抬头扫一眼。**
+     * 官方 eye-code 是条 10 秒的长曲线：大部分时间 scaleY 0.6 并下移 1 单位
+     * （盯着键盘的专注表情），中间穿插几次眨眼，57%~71% 抬起来左右扫两下屏幕。
+     * 少了这个，"干活"就只是身体在抖，脸上没有神——不可爱的关键一处。
+     */
+    const float ep = phase_of(t, 10000);
+    static const key_t EYE_SY[] = {
+        {0.00f, 0.6f}, {0.14f, 0.6f}, {0.15f, 0.1f}, {0.16f, 0.6f},
+        {0.36f, 0.6f}, {0.37f, 0.1f}, {0.38f, 0.6f},
+        {0.54f, 0.6f}, {0.55f, 0.1f},
+        {0.57f, 1.0f}, {0.69f, 1.0f}, {0.71f, 0.1f}, {0.73f, 0.6f},
+        {0.89f, 0.6f}, {0.90f, 0.1f}, {0.91f, 0.6f}, {1.00f, 0.6f}};
+    static const key_t EYE_DX[] = {
+        {0.00f, 0.0f}, {0.55f, 0.0f}, {0.57f, -1.0f}, {0.62f, 1.5f},
+        {0.64f, -0.5f}, {0.69f, 1.5f}, {0.73f, 0.0f}, {1.00f, 0.0f}};
+    static const key_t EYE_DY[] = {
+        {0.00f, 1.0f}, {0.55f, 1.0f}, {0.57f, -0.5f}, {0.69f, -0.5f},
+        {0.73f, 1.0f}, {1.00f, 1.0f}};
+    p->eye_scale_y = ease_keys(EYE_SY, 17, ep);
+    p->eye_dx = ease_keys(EYE_DX, 8, ep);
+    p->eye_dy = ease_keys(EYE_DY, 6, ep);
+
+    /* 呼吸照旧，但眨眼已由上面的曲线接管，不再叠加 */
+    static const key_t BX[] = {{0.0f, 1.0f}, {0.5f, 1.02f}, {1.0f, 1.0f}};
+    static const key_t BY[] = {{0.0f, 1.0f}, {0.5f, 0.98f}, {1.0f, 1.0f}};
+    const float bp = phase_of(t, 3200);
+    p->body_sx *= ease_keys(BX, 3, bp);
+    p->body_sy *= ease_keys(BY, 3, bp);
 }
 
 /*
@@ -304,20 +367,52 @@ static void pose_waiting(pose_t *p, uint32_t t)
     p->shadow_sx = ease_keys(SHADOW, 5, ph);
     p->shadow_alpha = p->shadow_sx;
 
-    /* 眼睛看向灯泡（右上），吃力时用 step-end 切成眯眼 */
-    static const key_t EYE_DX[] = {{0.00f, 0.0f}, {0.10f, 0.25f}, {0.76f, 0.25f},
-                                   {0.85f, 0.0f}, {1.00f, 0.0f}};
-    p->eye_dx = ease_keys(EYE_DX, 5, ph);
-    static const key_t SQUINT[] = {{0.00f, 1.0f}, {0.24f, 0.45f}, {0.70f, 1.0f}};
-    p->eye_scale_y = step_keys(SQUINT, 3, ph);
+    /*
+     * 眼睛：先抬头看灯泡（16%~24%），30% 眨一下，然后**切成 ^^ 笑眼**
+     * 一直保持到 72%，最后再睁回方块眼。
+     *
+     * 那个 ^^ 才是这个动作的表情核心——"我想到了，快来看"。
+     * 我原来只做了眯眼，结果整段动作只剩"吃力"没有"高兴"，
+     * 一个举着灯泡皱眉的家伙当然不可爱。
+     */
+    static const key_t EYE_DX[] = {{0.00f, 0.0f}, {0.11f, 0.0f}, {0.16f, 1.0f},
+                                   {0.24f, 1.0f}, {0.28f, 0.0f}, {1.00f, 0.0f}};
+    static const key_t EYE_DY[] = {{0.00f, 0.0f}, {0.11f, 0.0f}, {0.16f, -0.5f},
+                                   {0.24f, -0.5f}, {0.28f, 0.0f}, {1.00f, 0.0f}};
+    p->eye_dx = ease_keys(EYE_DX, 6, ph);
+    p->eye_dy = ease_keys(EYE_DY, 6, ph);
+
+    static const key_t BLINK[] = {{0.00f, 1.0f}, {0.29f, 1.0f}, {0.30f, 0.1f},
+                                  {0.72f, 0.1f}, {0.74f, 1.0f}, {1.00f, 1.0f}};
+    p->eye_scale_y = ease_keys(BLINK, 6, ph);
+    /* 31%~72% 换成笑眼；step 切换，不做插值 */
+    p->eye_mode = (ph >= 0.31f && ph < 0.72f) ? 1 : 0;
+    if (p->eye_mode == 1) p->eye_scale_y = 1.0f;
 }
 
+/*
+ * 睡觉：摊成一滩 + 深呼吸。
+ *
+ * 呼吸绕**脚底**做，而且纵向幅度极大（1.25 倍）——胸腔明显鼓起来又落下去。
+ * 站姿呼吸只有 2%，因为那是"活着"；睡姿要 25%，因为那是"睡熟了"。
+ * 数值来自官方 clawd-sleeping.svg 的 breathe-squash，4.5s 一轮。
+ */
 static void pose_sleeping(pose_t *p, uint32_t t)
 {
-    static const key_t SLOW[] = {{0.0f, 1.0f}, {0.5f, 0.985f}, {1.0f, 1.0f}};
-    p->body_sy = ease_keys(SLOW, 3, phase_of(t, 5000));
-    p->body_sx = 2.0f - p->body_sy;
-    p->eye_scale_y = 0.12f; /* 闭眼 */
+    p->body_form = 2;
+    p->eye_mode = 2;
+
+    static const key_t SQX[] = {{0.0f, 1.0f}, {0.30f, 1.02f}, {0.40f, 1.02f},
+                                {0.80f, 1.0f}, {1.0f, 1.0f}};
+    static const key_t SQY[] = {{0.0f, 1.0f}, {0.30f, 1.25f}, {0.40f, 1.25f},
+                                {0.80f, 1.0f}, {1.0f, 1.0f}};
+    const float ph = phase_of(t, 4500);
+    p->body_sx = ease_keys(SQX, 5, ph);
+    p->body_sy = ease_keys(SQY, 5, ph);
+
+    static const key_t SH[] = {{0.0f, 1.0f}, {0.30f, 1.05f}, {0.40f, 1.05f},
+                               {0.80f, 1.0f}, {1.0f, 1.0f}};
+    p->shadow_sx = ease_keys(SH, 5, ph);
 }
 
 /* ------------------------------------------------------------------ *
@@ -378,7 +473,11 @@ void clawd_draw(const clawd_canvas_t *canvas, const clawd_draw_t *p)
         case CLAWD_WAITING: pose_waiting(&pose, p->elapsed_ms); break;
         case CLAWD_SLEEPING: pose_sleeping(&pose, p->elapsed_ms); break;
         case CLAWD_IDLE:
-        default: apply_breathe_and_blink(&pose, p->elapsed_ms); break;
+        default:
+            /* 站着发呆用**加长的腿**，身体立起来才有精神——官方 idle 就是这么画的 */
+            pose.body_form = 1;
+            apply_breathe_and_blink(&pose, p->elapsed_ms);
+            break;
     }
 
     /* 单位原点：让 BODY_PIVOT 落在 (center_x, baseline_y)，再叠加重力位移 */
@@ -404,30 +503,72 @@ void clawd_draw(const clawd_canvas_t *canvas, const clawd_draw_t *p)
     transform_rect(&view, (rect_ptr), BODY_PIVOT_X, BODY_PIVOT_Y, pose.body_rot,        \
                    pose.body_sx, pose.body_sy, bdx, bdy, quad)
 
+    /*
+     * 按姿势挑几何。腿在不同状态下长短不同，睡姿更是整套换掉——
+     * 官方每个状态的 SVG 都是重画的，不是同一套图形做变换。
+     */
+    const rect_t *legs = pose.body_form == 2   ? R_SLEEP_LEGS
+                         : pose.body_form == 1 ? R_LEGS_TALL
+                                               : R_LEGS;
+    const rect_t *torso = pose.body_form == 2 ? &R_SLEEP_TORSO : &R_TORSO;
+    const rect_t *arm_l = pose.body_form == 2 ? &R_SLEEP_ARM_L : &R_ARM_L;
+    const rect_t *arm_r = pose.body_form == 2 ? &R_SLEEP_ARM_R : &R_ARM_R;
+
     /* 腿（各自带一点颤抖旋转，支点在腿根） */
     for (int i = 0; i < 4; i++) {
-        const rect_t *leg = &R_LEGS[i];
-        transform_rect(&view, leg, leg->x + leg->w * 0.5f, leg->y, pose.leg_rot[i], 1.0f,
-                       1.0f, bdx, bdy, quad);
+        const rect_t *leg = &legs[i];
+        transform_rect(&view, leg, leg->x + leg->w * 0.5f, leg->y, pose.leg_rot[i],
+                       pose.body_form == 2 ? pose.body_sx : 1.0f,
+                       pose.body_form == 2 ? pose.body_sy : 1.0f, bdx, bdy, quad);
         fill_quad(canvas, quad, p->body_color);
     }
 
     /* 躯干 */
-    BODY_XFORM(&R_TORSO);
+    BODY_XFORM(torso);
     fill_quad(canvas, quad, p->body_color);
 
     /* 双臂 */
-    transform_rect(&view, &R_ARM_L, ARM_L_PIVOT_X, ARM_L_PIVOT_Y, pose.arm_l_rot, 1.0f,
-                   1.0f, bdx, bdy, quad);
-    fill_quad(canvas, quad, p->body_color);
-    transform_rect(&view, &R_ARM_R, ARM_R_PIVOT_X, ARM_R_PIVOT_Y, pose.arm_r_rot, 1.0f,
-                   1.0f, bdx, bdy + pose.arm_r_dy, quad);
-    fill_quad(canvas, quad, p->body_color);
+    if (pose.body_form == 2) {
+        /* 睡姿的手是摊在地上的，跟着身体一起缩放，不单独旋转 */
+        BODY_XFORM(arm_l);
+        fill_quad(canvas, quad, p->body_color);
+        BODY_XFORM(arm_r);
+        fill_quad(canvas, quad, p->body_color);
+    } else {
+        transform_rect(&view, arm_l, ARM_L_PIVOT_X, ARM_L_PIVOT_Y, pose.arm_l_rot, 1.0f,
+                       1.0f, bdx, bdy, quad);
+        fill_quad(canvas, quad, p->body_color);
+        transform_rect(&view, arm_r, ARM_R_PIVOT_X, ARM_R_PIVOT_Y, pose.arm_r_rot, 1.0f,
+                       1.0f, bdx, bdy + pose.arm_r_dy, quad);
+        fill_quad(canvas, quad, p->body_color);
+    }
 
-    /* 眼睛（画在躯干之上；纵向压缩即眨眼） */
-    {
+    /*
+     * 眼睛。三种形态：
+     *   0 方块眼（纵向压缩即眨眼）
+     *   1 ^^ 笑眼——两撇朝上的折线，用两个斜矩形拼
+     *   2 睡觉的细线
+     * 表情是"可爱"的绝大部分，只做眨眼是不够的。
+     */
+    if (pose.eye_mode == 1) {
+        /* ^^ ：每只眼用两小段拼成尖朝上的折线，端点取自官方 polyline */
+        static const float SMILE[2][4] = {{3.5f, 4.5f, 9.5f, 10.5f}, {4.5f, 5.5f, 10.5f, 11.5f}};
+        for (int e = 0; e < 2; e++) {
+            const float cx = (e == 0) ? 4.5f : 10.5f;
+            for (int half = 0; half < 2; half++) {
+                const float x0 = (half == 0) ? cx - 1.0f : cx;
+                rect_t seg = {x0, 8.6f, 1.0f, 0.45f};
+                const float rot = (half == 0 ? -40.0f : 40.0f) * (float)M_PI / 180.0f;
+                transform_rect(&view, &seg, half == 0 ? x0 + 1.0f : x0, seg.y + seg.h * 0.5f,
+                               rot, pose.body_sx, pose.body_sy, bdx, bdy, quad);
+                fill_quad(canvas, quad, p->eye_color);
+            }
+        }
+        (void)SMILE;
+    } else {
         const float eye_scale = pose.eye_scale_y < 0.05f ? 0.05f : pose.eye_scale_y;
-        rect_t el = R_EYE_L, er = R_EYE_R;
+        rect_t el = pose.eye_mode == 2 ? R_SLEEP_EYE_L : R_EYE_L;
+        rect_t er = pose.eye_mode == 2 ? R_SLEEP_EYE_R : R_EYE_R;
         const float shrink_l = el.h * (1.0f - eye_scale) * 0.5f;
         el.y += shrink_l;
         el.h *= eye_scale;
@@ -435,6 +576,8 @@ void clawd_draw(const clawd_canvas_t *canvas, const clawd_draw_t *p)
         er.h *= eye_scale;
         el.x += pose.eye_dx;
         er.x += pose.eye_dx;
+        el.y += pose.eye_dy;
+        er.y += pose.eye_dy;
 
         transform_rect(&view, &el, BODY_PIVOT_X, BODY_PIVOT_Y, pose.body_rot, pose.body_sx,
                        pose.body_sy, bdx, bdy, quad);

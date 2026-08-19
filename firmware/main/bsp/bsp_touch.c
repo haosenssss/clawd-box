@@ -31,6 +31,9 @@ static const char *TAG = "touch";
 #define GT_STATUS_COUNT_MASK 0x0F
 
 static i2c_master_dev_handle_t s_dev = NULL;
+/* 最后一次读到的触点位置，抬起时沿用 */
+static int16_t s_last_x = 0;
+static int16_t s_last_y = 0;
 
 static esp_err_t gt_read(uint16_t reg, uint8_t *out, size_t len)
 {
@@ -110,11 +113,18 @@ bool bsp_touch_read(bsp_touch_point_t *out)
     if (count > 0) {
         uint8_t p[8] = {0};
         if (gt_read(GT_REG_POINT1, p, sizeof(p)) == ESP_OK) {
-            out->x = (int16_t)((uint16_t)p[1] | ((uint16_t)p[2] << 8));
-            out->y = (int16_t)((uint16_t)p[3] | ((uint16_t)p[4] << 8));
+            s_last_x = (int16_t)((uint16_t)p[1] | ((uint16_t)p[2] << 8));
+            s_last_y = (int16_t)((uint16_t)p[3] | ((uint16_t)p[4] << 8));
             touched = true;
         }
     }
+    /*
+     * **抬起这一帧没有坐标可读**（触点数为 0），必须沿用最后一次按下的位置。
+     * 之前这里让坐标保持调用方传进来的 0，于是抬手时算出的位移永远是
+     * -x0 这么大的负数，任何手势——哪怕只是点一下——都被判成"向左滑"。
+     */
+    out->x = s_last_x;
+    out->y = s_last_y;
 
     /* **必须回写 0 清标志**，否则 GT911 不再更新，表现为"只能读到第一次触摸" */
     gt_write(GT_REG_STATUS, 0);

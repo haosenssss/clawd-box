@@ -120,19 +120,12 @@ static void draw_dot(uint16_t *fb, int cx, int cy, int r, uint16_t c, bool fille
  * @param fill_override 非 0 时覆盖填充色（Context 按评级变色用）
  */
 static void draw_limit_ex(uint16_t *fb, const text_canvas_t *tc, int y, const char *label,
-                          float pct, bool cached, uint32_t age_sec, int64_t resets_at,
-                          int64_t now_unix, const char *right, uint16_t fill_override)
+                          float pct, int64_t resets_at, int64_t now_unix, const char *right,
+                          uint16_t fill_override)
 {
     /* 额度栏整体压暗——高亮留给项目名和"正在运行"的状态 */
-    const uint16_t label_col = COL_VERB;
-    /* 缓存来源的行在标签后加 "*"，与实时值区分（陈旧天数见管理页） */
-    char labelbuf[20];
-    if (cached) {
-        snprintf(labelbuf, sizeof(labelbuf), "%s*", label);
-        label = labelbuf;
-    }
     text_draw(tc, BAR_LABEL_CX - text_width(label, TEXT_SCALE) / 2, y + BAR_TEXT_DY,
-              label, TEXT_SCALE, label_col);
+              label, TEXT_SCALE, COL_VERB);
 
     fill_rect(fb, BAR_X, y, BAR_W, BAR_H, COL_EMPTY);
 
@@ -146,7 +139,6 @@ static void draw_limit_ex(uint16_t *fb, const text_canvas_t *tc, int y, const ch
     uint16_t fill = COL_FILL;
     if (pct >= 95.0f) fill = COL_CRIT;
     else if (pct >= 80.0f) fill = COL_WARN;
-    if (cached) fill = COL_SUBTLE; /* 缓存来源用暗色，与实时值区分 */
     if (fill_override != 0) fill = fill_override;
 
     int w = (int)((pct / 100.0f) * (float)BAR_W);
@@ -159,27 +151,26 @@ static void draw_limit_ex(uint16_t *fb, const text_canvas_t *tc, int y, const ch
               TEXT_SCALE, COL_NAME);
 
     /*
-     * 重置时间列**永远只表示倒计时**，字号与左侧一致。
-     * 之前这一格对缓存行显示的是"缓存年龄"、对实时行显示倒计时——
-     * 同一列两种含义，必然被误读成"重置于 24 天前"。
-     * 现在缓存行的陈旧程度改由标签后的 "*" 表示（见下），语义不再混淆。
+     * 最右一列**永远只表示倒计时**，拿不到就是 "--"。
+     * 不用 "*" 之类的角标去标注数据新鲜度，也不拿假定值占位——
+     * 一个不确定的数字摆在那里，比一个诚实的 "--" 更容易被当真。
      */
-    (void)age_sec;
     if (right != NULL) {
-        text_draw(tc, BAR_RESET_X, y + BAR_TEXT_DY, right, TEXT_SCALE, COL_RESET);
+        text_draw(tc, BAR_RIGHT_EDGE - text_width(right, TEXT_SCALE), y + BAR_TEXT_DY, right,
+                  TEXT_SCALE, COL_RESET);
     } else {
         format_countdown(buf, sizeof(buf), resets_at, now_unix);
-        text_draw(tc, BAR_RESET_X, y + BAR_TEXT_DY, buf[0] != '\0' ? buf : "--",
+        const char *txt = buf[0] != '\0' ? buf : "--";
+        text_draw(tc, BAR_RIGHT_EDGE - text_width(txt, TEXT_SCALE), y + BAR_TEXT_DY, txt,
                   TEXT_SCALE, COL_RESET);
     }
 }
 
 /* 常用形态的薄包装 */
 static void draw_limit(uint16_t *fb, const text_canvas_t *tc, int y, const char *label,
-                       float pct, bool cached, uint32_t age_sec, int64_t resets_at,
-                       int64_t now_unix)
+                       float pct, int64_t resets_at, int64_t now_unix)
 {
-    draw_limit_ex(fb, tc, y, label, pct, cached, age_sec, resets_at, now_unix, NULL, 0);
+    draw_limit_ex(fb, tc, y, label, pct, resets_at, now_unix, NULL, 0);
 }
 
 /**
@@ -189,11 +180,16 @@ static void draw_limit(uint16_t *fb, const text_canvas_t *tc, int y, const char 
  */
 static const char *context_rating(float pct, uint16_t *color)
 {
+    /*
+     * **最多三个字符。** 这一列右边界离屏幕边缘只有 ~40px，
+     * "roomy" 这种五个字母的词会直接溢出屏幕右侧。
+     * 严重程度由色条颜色承担，文字只报占用档位就够了。
+     */
     if (pct < 0.0f)  { *color = COL_EMPTY; return "--"; }
-    if (pct < 50.0f) { *color = COL_OK;    return "roomy"; }
-    if (pct < 75.0f) { *color = COL_FILL;  return "ok"; }
-    if (pct < 90.0f) { *color = COL_WARN;  return "tight"; }
-    *color = COL_CRIT; return "full";
+    if (pct < 50.0f) { *color = COL_OK;    return "ok"; }
+    if (pct < 75.0f) { *color = COL_FILL;  return "mid"; }
+    if (pct < 90.0f) { *color = COL_WARN;  return "hi"; }
+    *color = COL_CRIT; return "max";
 }
 
 /** 睡觉时头顶飘起的 ZZZ，三个字母错开相位、越飘越淡越小。 */
@@ -274,10 +270,9 @@ void session_page_draw(uint16_t *fb, const text_canvas_t *tc, const model_t *m,
 
     /* 底部四条等距 */
     fill_rect(fb, 0, BAR_Y0 - 8, BSP_LCD_H_RES, BSP_LCD_V_RES - BAR_Y0 + 8, COL_BG);
-    draw_limit(fb, tc, BAR_Y0, "5h", m->limits.five_hour.pct, m->limits.cached,
-               m->limits.age_sec, m->limits.five_hour.resets_at, now_unix);
+    draw_limit(fb, tc, BAR_Y0, "5h", m->limits.five_hour.pct,
+               m->limits.five_hour.resets_at, now_unix);
     draw_limit(fb, tc, BAR_Y0 + BAR_DY, "Week", m->limits.seven_day.pct,
-               m->limits.cached, m->limits.age_sec,
                m->limits.seven_day.resets_at, now_unix);
 
     /*
@@ -292,8 +287,8 @@ void session_page_draw(uint16_t *fb, const text_canvas_t *tc, const model_t *m,
     uint16_t ctx_color = 0;
     const float ctx = focus != NULL ? focus->ctx_pct : -1.0f;
     const char *rating = context_rating(ctx, &ctx_color);
-    draw_limit_ex(fb, tc, BAR_Y0 + BAR_DY * 2, "Context", ctx, false, 0, 0, now_unix,
-                  rating, ctx_color);
+    draw_limit_ex(fb, tc, BAR_Y0 + BAR_DY * 2, "Context", ctx, 0, now_unix, rating,
+                  ctx_color);
 }
 
 /**

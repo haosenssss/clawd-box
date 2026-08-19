@@ -31,23 +31,39 @@
 #define FRAME_MS (1000 / TARGET_FPS)
 #define ROTATE_MS 7000
 
-#define SPRITE_SCALE 18.0f   /* 15 单位宽 -> 270px，与额度条同宽同轴 */
-#define SPRITE_BASELINE_Y 262
+#define SPRITE_SCALE 16.0f   /* 15 单位宽 -> 240px，与额度条同宽同轴 */
+#define SPRITE_BASELINE_Y 258
+
+/*
+ * 精灵合成区的上下边界。合成区每帧整块覆盖，所以它**绝不能碰到**
+ * 上面的 subagent 圆点和下面的项目名——碰到就是每帧把它们擦一次。
+ * 人物本体在 54..282 之间（含 ±24px 重力位移），这条带子刚好把它包住。
+ */
+#define SPRITE_BAND_TOP 50
+#define SPRITE_BAND_BOTTOM 290
 
 /* ---- 布局 ---- */
 #define DOTS_Y 38
 #define DOT_R 7
 #define DOT_GAP 26
-#define NAME_Y 290           /* 第一行：项目名 */
+#define NAME_Y 296           /* 第一行：项目名 */
 #define VERB_Y 322           /* 第二行：状态词 */
 #define BAR_LABEL_CX 50       /* 标签列中心（0..条子左缘 之间居中） */
-#define BAR_X 105              /* = 精灵左边缘，两者必须等宽同轴 */
-#define BAR_W 270              /* = 精灵宽度 15 单位 x 18 */
+#define BAR_X 120              /* = 精灵左边缘，两者必须等宽同轴 */
+/*
+ * 图形宽度是被**右侧两列**卡死的，不是想多宽就多宽：
+ * 条子右缘之后还要放下百分比和倒计时，挤了就会把倒计时顶出屏幕。
+ * 240 = 15 单位 x 16，右边留出 120px 给两列 + 边距，是能同时保住
+ * "图标够大"和"重置时间显示完整"的那个平衡点。
+ */
+#define BAR_W 240
 #define BAR_H 16
 /* 百分比列**右对齐**：这一列的值宽度不一（5% / 42% / 100%），
  * 左对齐会让各行的 % 号错开成锯齿。右边缘对齐后 % 永远在同一条竖线上。 */
-#define BAR_PCT_R 429
-#define BAR_RESET_X 439
+#define BAR_PCT_R 412
+/* 最右一列**右对齐到这里**。左对齐的话内容一长就顶出屏幕
+ * （"roomy" 五个字母就溢出了），右对齐则长短都落在同一条竖线上。 */
+#define BAR_RIGHT_EDGE 464
 #define BAR_Y0 358
 #define BAR_DY 42
 #define BAR_ROWS 3

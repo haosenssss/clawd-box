@@ -97,6 +97,7 @@ static input_event_t poll_touch(uint32_t now_ms)
     /* 抬起这一帧读到的坐标已经无效，用最后一次按下的位置来判 */
     const int dx = (int)p.x - (int)s_touch.x0;
 
+    ESP_LOGI(TAG, "抬起: dx=%d dt=%ums (起点 x=%d)", dx, (unsigned)dt, (int)s_touch.x0);
     if (dt < SWIPE_MAX_MS && dx >= SWIPE_MIN_PX) return INPUT_GO_LEFT;
     if (dt < SWIPE_MAX_MS && dx <= -SWIPE_MIN_PX) return INPUT_GO_RIGHT;
     if (dt < TAP_MAX_MS && dx > -TAP_MAX_PX && dx < TAP_MAX_PX) return INPUT_ACK;
@@ -155,11 +156,15 @@ static input_event_t poll_pwr(void)
     return INPUT_ACK;
 }
 
+static const char *EVENT_NAME[] = {"-", "去管理页", "下一页", "确认"};
+
 input_event_t input_poll(uint32_t now_ms)
 {
+    const char *src = "触摸";
     input_event_t e = poll_touch(now_ms);
-    if (e != INPUT_NONE) return e;
-    e = poll_button(now_ms);
-    if (e != INPUT_NONE) return e;
-    return poll_pwr();
+    if (e == INPUT_NONE) { e = poll_button(now_ms); src = "BOOT"; }
+    if (e == INPUT_NONE) { e = poll_pwr(); src = "PWR"; }
+    /* 输入事件很稀疏，全部打日志——手感对不对只能靠这行来对账 */
+    if (e != INPUT_NONE) ESP_LOGI(TAG, "%s -> %s", src, EVENT_NAME[e]);
+    return e;
 }

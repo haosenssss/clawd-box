@@ -24,7 +24,19 @@ static const char *TAG = "audio";
 
 /* 一段提示音最长 500ms。够放三个音符，也不至于长到烦人。 */
 #define MAX_MS 500
-#define MAX_SAMPLES (SAMPLE_RATE * MAX_MS / 1000)
+#define TONE_SAMPLES (SAMPLE_RATE * MAX_MS / 1000)
+
+/*
+ * 音符放完必须再灌一段静音，**否则声音会一直循环响下去**。
+ *
+ * I2S 通道一旦 enable，DMA 就在那几个描述符之间无限轮转。停止写入
+ * 并不会让它停下来——它只是把缓冲里**上一次的内容反复播**，
+ * 于是提示音变成了没完没了的循环。
+ * 灌够一整圈 DMA 缓冲的静音，环里就全是 0 了。
+ * 默认 6 个描述符 × 240 帧 = 1440 帧，取 3000 留足余量。
+ */
+#define SILENCE_SAMPLES 3000
+#define MAX_SAMPLES (TONE_SAMPLES + SILENCE_SAMPLES)
 
 typedef struct {
     float freq;   /* Hz，0 = 静音间隔 */
@@ -49,6 +61,7 @@ static const note_t *sequence_for(sound_t s)
 }
 
 static esp_codec_dev_handle_t s_dev = NULL;
+static i2s_chan_handle_t s_tx = NULL;
 static QueueHandle_t s_queue = NULL;
 static int16_t *s_buf = NULL;
 static bool s_muted = false;
@@ -94,9 +107,24 @@ static void audio_task(void *arg)
     while (true) {
         if (xQueueReceive(s_queue, &s, portMAX_DELAY) != pdTRUE) continue;
         if (s_muted || s_dev == NULL) continue;
-        const size_t n = render(sequence_for(s), s_buf, MAX_SAMPLES);
+        size_t n = render(sequence_for(s), s_buf, TONE_SAMPLES);
         if (n == 0) continue;
+
+        ESP_LOGI(TAG, "播放 %d（%u 采样）", (int)s, (unsigned)n);
+
+        /* 音符之后紧跟静音，把 DMA 环里的旧内容冲掉——见 SILENCE_SAMPLES */
+        memset(s_buf + n, 0, SILENCE_SAMPLES * sizeof(int16_t));
+        n += SILENCE_SAMPLES;
+
+        /*
+         * **放完就把通道关掉。**
+         * 光靠补静音还不够保险：只要 I2S 通道是 enable 的，DMA 就在描述符之间
+         * 无限轮转，任何残留都会被反复播出去——症状就是提示音响个没完。
+         * 关掉通道等于把数据流掐断，物理上不可能再出声；下次播放前再打开。
+         */
+        i2s_channel_enable(s_tx);
         esp_codec_dev_write(s_dev, s_buf, n * sizeof(int16_t));
+        i2s_channel_disable(s_tx);
     }
 }
 
@@ -118,16 +146,15 @@ static esp_err_t i2s_init(i2s_chan_handle_t *tx)
             .invert_flags = {0},
         },
     };
-    ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(*tx, &std_cfg), TAG, "配置失败");
-    return i2s_channel_enable(*tx);
+    /* 初始化完**不使能**——空闲时通道必须是关着的，见 audio_task */
+    return i2s_channel_init_std_mode(*tx, &std_cfg);
 }
 
 esp_err_t audio_init(void)
 {
-    i2s_chan_handle_t tx = NULL;
-    ESP_RETURN_ON_ERROR(i2s_init(&tx), TAG, "I2S 初始化失败");
+    ESP_RETURN_ON_ERROR(i2s_init(&s_tx), TAG, "I2S 初始化失败");
 
-    const audio_codec_i2s_cfg_t i2s_cfg = {.port = I2S_NUM_0, .tx_handle = tx};
+    const audio_codec_i2s_cfg_t i2s_cfg = {.port = I2S_NUM_0, .tx_handle = s_tx};
     const audio_codec_data_if_t *data_if = audio_codec_new_i2s_data(&i2s_cfg);
 
     audio_codec_i2c_cfg_t i2c_cfg = {
