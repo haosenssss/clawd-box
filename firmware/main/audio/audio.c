@@ -23,7 +23,7 @@ static const char *TAG = "audio";
 #define OUT_VOLUME 70
 
 /* 一段提示音最长 500ms。够放三个音符，也不至于长到烦人。 */
-#define MAX_MS 500
+#define MAX_MS 1300
 #define TONE_SAMPLES (SAMPLE_RATE * MAX_MS / 1000)
 
 /*
@@ -43,12 +43,30 @@ typedef struct {
     uint16_t ms;
 } note_t;
 
-/* 上行三音 C5-E5-G5：短促、明亮、结束感明确 */
-static const note_t SEQ_DONE[] = {{523.25f, 80}, {659.25f, 80}, {783.99f, 120}, {0, 0}};
-/* 叩门式重复双音：同一个音重复本身就在说"喂"，比任何旋律都直接 */
-static const note_t SEQ_NEEDS[] = {{987.77f, 90}, {0.0f, 70}, {987.77f, 90}, {0, 0}};
-/* 下行且低：出问题的通用听感 */
-static const note_t SEQ_LIMIT[] = {{392.00f, 130}, {261.63f, 200}, {0, 0}};
+/*
+ * 音阶用**大调五声**（C D E G A）。
+ *
+ * 五声音阶里任意两个音叠在一起都不会出现刺耳的小二度和三全音，
+ * 所以听感天然是温和的、不紧张的——这正是 Anthropic 那种审美要的东西：
+ * 不抢戏、不像游戏音效、不像系统报警。和弦感来自音程本身，
+ * 而不是靠加音量或加合成器花活。
+ */
+/* 完成：C5 - E5 - G5 - C6 上行四音，最后一个音留长做余韵。
+ * 原来三个短音总共 280ms，听起来像"嘀"了一下就没了；
+ * 拉到 700ms 并让尾音自然衰减，才有"一件事收尾了"的分量。 */
+static const note_t SEQ_DONE[] = {
+    {523.25f, 110}, {659.25f, 110}, {783.99f, 130}, {1046.50f, 340}, {0, 0}};
+
+/* 等你输入：A5 - D6 上行两次。上行=询问，重复=需要你动手。
+ * 两遍之间留一点静默，像敲两下门而不是连成一串。 */
+static const note_t SEQ_NEEDS[] = {
+    {880.00f, 120}, {1174.66f, 170}, {0.0f, 110},
+    {880.00f, 120}, {1174.66f, 220}, {0, 0}};
+
+/* 限额告急：G4 - E4 - C4 下行三音。下行且低，是"出问题"的通用听感。
+ * 放慢、放长，让它听起来像一声叹息而不是警报。 */
+static const note_t SEQ_LIMIT[] = {
+    {392.00f, 170}, {329.63f, 170}, {261.63f, 380}, {0, 0}};
 
 static const note_t *sequence_for(sound_t s)
 {
@@ -72,30 +90,52 @@ bool audio_muted(void) { return s_muted; }
 /**
  * 把一串音符渲染成 PCM。
  *
- * 每个音符都套一个短起振 + 短收尾的包络：**不加包络就会有咔哒声**，
- * 因为波形在非零处被硬切断，那一下阶跃比音符本身还响。
+ * 三个决定听感的细节：
+ *
+ * **一、指数衰减而不是方波包络。** 现实里被敲响的东西都是"起得快、落得慢"，
+ * 线性收尾听起来像被人为掐断。exp 衰减是钢琴、木琴、钟这类声音的共同特征。
+ *
+ * **二、叠一个二次谐波。** 纯正弦干净但也单薄、发闷。加一点点八度泛音
+ * （幅度只有基频的 1/5）就有了木质的温度，又不至于变刺耳。
+ *
+ * **三、音符之间不清相位、尾音互相重叠。** 前一个音的尾巴还没落干净，
+ * 下一个音就进来了，听起来是一串连贯的琶音而不是三个孤立的"嘀"。
  */
 static size_t render(const note_t *seq, int16_t *out, size_t cap)
 {
     size_t n = 0;
-    float phase = 0.0f;
+    /* 先清零：后面是叠加写入，尾音要能跨过音符边界 */
+    for (size_t i = 0; i < cap; i++) out[i] = 0;
 
+    size_t at = 0;
     for (const note_t *note = seq; note->ms != 0; note++) {
-        const size_t len = (size_t)SAMPLE_RATE * note->ms / 1000;
-        const size_t edge = len / 8 > 0 ? len / 8 : 1; /* 起振/收尾各占 1/8 */
-
-        for (size_t i = 0; i < len && n < cap; i++, n++) {
-            if (note->freq <= 0.0f) { out[n] = 0; continue; }
-
-            float env = 1.0f;
-            if (i < edge) env = (float)i / (float)edge;
-            else if (i > len - edge) env = (float)(len - i) / (float)edge;
-
-            phase += 2.0f * (float)M_PI * note->freq / (float)SAMPLE_RATE;
-            if (phase > 2.0f * (float)M_PI) phase -= 2.0f * (float)M_PI;
-            out[n] = (int16_t)(sinf(phase) * env * 9000.0f);
+        const size_t step = (size_t)SAMPLE_RATE * note->ms / 1000;
+        if (note->freq <= 0.0f) { /* 静默间隔只推进时间 */
+            at += step;
+            if (at > n) n = at;
+            continue;
         }
-        phase = 0.0f;
+
+        /* 尾音比音符本身长——重叠出来的就是"余韵" */
+        const size_t tail = step + (size_t)SAMPLE_RATE * 260 / 1000;
+        const float w = 2.0f * (float)M_PI * note->freq / (float)SAMPLE_RATE;
+        /* 起振 6ms：再短会咔哒，再长会发软 */
+        const size_t attack = (size_t)SAMPLE_RATE * 6 / 1000;
+        const float decay = 3.2f / (float)tail;
+
+        for (size_t i = 0; i < tail; i++) {
+            const size_t idx = at + i;
+            if (idx >= cap) break;
+            float env = expf(-decay * (float)i);
+            if (i < attack) env *= (float)i / (float)attack;
+
+            const float ph = w * (float)i;
+            const float v = sinf(ph) + 0.20f * sinf(ph * 2.0f);
+            const int32_t sample = (int32_t)out[idx] + (int32_t)(v * env * 7200.0f);
+            out[idx] = (int16_t)(sample > 32000 ? 32000 : (sample < -32000 ? -32000 : sample));
+            if (idx + 1 > n) n = idx + 1;
+        }
+        at += step;
     }
     return n;
 }

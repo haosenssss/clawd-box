@@ -342,6 +342,54 @@ static void put_unit_rect(const clawd_canvas_t *canvas, const view_t *v, float x
     fill_quad(canvas, quad, color);
 }
 
+/* --- 干活：一张有厚度的小键盘 + 与手臂同相的按键 --- */
+
+#define KB_TOP clawd_rgb565(0x5A, 0x6B, 0x76)   /* 顶面，偏亮 */
+#define KB_FRONT clawd_rgb565(0x33, 0x42, 0x4A) /* 前沿，压暗做出厚度 */
+#define KEY_IDLE clawd_rgb565(0x8C, 0xA0, 0xAB)
+#define KEY_DOWN clawd_rgb565(0xEC, 0xF3, 0xF6)
+
+#define KB_X 2.4f
+#define KB_W 10.2f
+#define KB_TOP_Y 13.15f
+#define KB_TOP_H 1.15f
+#define KB_FRONT_H 0.5f
+#define KB_COLS 6
+
+/**
+ * 键盘。
+ *
+ * 之前那版是整幅宽的一块灰板，把人物腰斩，很丑。要点有三个：
+ *   1. **窄**——只比身体略宽，它是个道具不是布景
+ *   2. **有厚度**——顶面偏亮、前沿压暗，两条色带就够读出立体
+ *   3. **按键和手臂同相**——左手压到最低时左边的键才亮。
+ *      原来按键各闪各的，看着是一排随机跳的灯，不是有人在敲。
+ *      因果关系对上了，"在打字"这件事才成立。
+ */
+static void props_keyboard(const clawd_canvas_t *canvas, const view_t *v, float bdy,
+                           float arm_l_rot, float arm_r_rot)
+{
+    put_unit_rect(canvas, v, KB_X, KB_TOP_Y, KB_W, KB_TOP_H, bdy, KB_TOP);
+    put_unit_rect(canvas, v, KB_X, KB_TOP_Y + KB_TOP_H, KB_W, KB_FRONT_H, bdy, KB_FRONT);
+
+    /* 手臂转到越负越靠下 = 正在按下。归一到 0..1 的"按压深度"。 */
+    const float dl = arm_l_rot < 0.0f ? (-arm_l_rot) / 0.66f : 0.0f;
+    const float dr = arm_r_rot > 0.0f ? (arm_r_rot) / 0.66f : 0.0f;
+
+    const float kw = KB_W / (float)KB_COLS * 0.72f;
+    const float gap = KB_W / (float)KB_COLS;
+    for (int col = 0; col < KB_COLS; col++) {
+        const float x = KB_X + 0.16f + (float)col * gap;
+        /* 左半边归左手管，右半边归右手管 */
+        const float depth = (col < KB_COLS / 2) ? dl : dr;
+        const bool down = depth > 0.62f;
+        /* 按下的键往下沉一点点——纯换色是平的，位移才有手感 */
+        const float sink = down ? 0.12f : 0.0f;
+        put_unit_rect(canvas, v, x, KB_TOP_Y + 0.22f + sink, kw, 0.42f, bdy,
+                      down ? KEY_DOWN : KEY_IDLE);
+    }
+}
+
 /* --- 干活：思绪从头顶飘出去 --- */
 #define BIT_COUNT 4
 static const float BIT_X[BIT_COUNT] = {-1.4f, 15.6f, -0.9f, 15.1f};
@@ -768,6 +816,11 @@ void clawd_draw(const clawd_canvas_t *canvas, const clawd_draw_t *p)
     BODY_XFORM(torso);
     fill_quad(canvas, quad, p->body_color);
 
+    /* 键盘画在躯干之上、手臂之下——手才会落在键上 */
+    if (p->state == CLAWD_WORKING) {
+        props_keyboard(canvas, &view, bdy, pose.arm_l_rot, pose.arm_r_rot);
+    }
+
     /* 双臂 */
     if (pose.body_form == 2) {
         /* 睡姿的手是摊在地上的，跟着身体一起缩放，不单独旋转 */
@@ -830,7 +883,9 @@ void clawd_draw(const clawd_canvas_t *canvas, const clawd_draw_t *p)
 
     /* 道具画在最后：它们都在人物轮廓之外，不会被身体盖住 */
     switch (p->state) {
-        case CLAWD_WORKING: props_working(canvas, &view, p->elapsed_ms, bdy); break;
+        case CLAWD_WORKING:
+            props_working(canvas, &view, p->elapsed_ms, bdy);
+            break;
         case CLAWD_DONE: props_done(canvas, &view, p->elapsed_ms, bdy); break;
         case CLAWD_WAITING: props_waiting(canvas, &view, p->elapsed_ms, bdy, pose.arm_r_dy); break;
         case CLAWD_SLEEPING: props_sleeping(canvas, &view, p->elapsed_ms, bdy); break;

@@ -55,27 +55,36 @@ static void format_countdown(char *out, size_t n, int64_t resets_at, int64_t now
  * 不做保护就会画到屏幕外。
  */
 /**
- * 项目名：**优先把字号做大，放不下就折行，最后才缩字号**。
+ * 把一个名字按**固定字号**排成一到两行。
  *
- * 顺序很关键。原来是"放不下就缩"，于是长项目名一路缩到看不清；
- * 现在是先在大字号上试折行——两行大字远比一行小字好读。
- * 折行在分隔符（- / _ / .）处断，断点取最接近中点的那个，两行才均衡。
+ * **字号是固定的，不随长度变。** 之前是"放不下就缩"，结果同一个位置
+ * 在不同项目之间字号忽大忽小，界面看着就不稳。放不下就折行；
+ * 两行还放不下才截断——但字号自始至终不动。
+ *
+ * 返回实际用了几行，调用方据此决定后面的元素往下让多少。
+ * cx < 0 表示左对齐到 x = -cx，否则以 cx 为中心居中。
  */
-static void draw_name(const text_canvas_t *tc, int cx, int y, int line_h, const char *s,
-                      int max_w, int max_scale, uint16_t color)
+static int layout_name(const text_canvas_t *tc, int cx, int y, int line_h, const char *s,
+                       int max_w, int scale, uint16_t color)
 {
-    /* 1) 一行放得下：用能放下的最大字号，并在两行的位置里居中 */
-    for (int sc = max_scale; sc >= 1; sc--) {
-        if (text_width(s, sc) > max_w) continue;
-        text_draw_center(tc, cx, y + line_h / 2, s, sc, color);
-        return;
+    const int draw_x = cx < 0 ? -cx : cx;
+    const bool left_align = (cx < 0);
+#define PUT_LINE(txt, yy)                                                       \
+    do {                                                                        \
+        if (left_align) text_draw(tc, draw_x, (yy), (txt), scale, color);        \
+        else text_draw_center(tc, draw_x, (yy), (txt), scale, color);            \
+    } while (0)
+
+    if (text_width(s, scale) <= max_w) {
+        PUT_LINE(s, y);
+        return 1;
     }
 
-    /* 断点：所有分隔符里最接近中点的那个 */
+    /* 断点：所有分隔符里最接近中点的那个，两行才均衡 */
     const int len = (int)strlen(s);
     int split = -1, best = len;
     for (int i = 1; i < len - 1; i++) {
-        if (s[i] != '-' && s[i] != '_' && s[i] != '.') continue;
+        if (s[i] != '-' && s[i] != '_' && s[i] != '.' && s[i] != ' ') continue;
         const int d = i > len / 2 ? i - len / 2 : len / 2 - i;
         if (d < best) { best = d; split = i; }
     }
@@ -87,21 +96,17 @@ static void draw_name(const text_canvas_t *tc, int cx, int y, int line_h, const 
     a[na] = '\0';
     snprintf(b, sizeof(b), "%s", s + split);
 
-    /* 2) 两行：同样先试最大字号 */
-    for (int sc = max_scale; sc >= 1; sc--) {
-        if (text_width(a, sc) > max_w || text_width(b, sc) > max_w) continue;
-        text_draw_center(tc, cx, y, a, sc, color);
-        text_draw_center(tc, cx, y + line_h, b, sc, color);
-        return;
+    /* 第二行仍超宽就截断，**不降字号** */
+    if (text_width(b, scale) > max_w) {
+        const int per = TEXT_ADVANCE(scale);
+        int fit = (max_w - text_width("..", scale)) / per;
+        if (fit < 1) fit = 1;
+        if (fit < (int)strlen(b)) { b[fit] = '.'; b[fit + 1] = '.'; b[fit + 2] = '\0'; }
     }
-
-    /* 3) 最小字号还超宽：截断第二行 */
-    const int per = TEXT_ADVANCE(1);
-    int fit = (max_w - text_width("..", 1)) / per;
-    if (fit < 1) fit = 1;
-    if (fit < (int)strlen(b)) { b[fit] = '.'; b[fit + 1] = '.'; b[fit + 2] = '\0'; }
-    text_draw_center(tc, cx, y, a, 1, color);
-    text_draw_center(tc, cx, y + line_h, b, 1, color);
+    PUT_LINE(a, y);
+    PUT_LINE(b, y + line_h);
+    return 2;
+#undef PUT_LINE
 }
 
 /* ------------------------------------------------------------------ */
@@ -291,13 +296,13 @@ void session_page_draw(uint16_t *fb, const text_canvas_t *tc, const model_t *m,
         /* 只有"在跑"的状态才高亮；待机/睡觉压暗，避免和额度栏抢注意力 */
         const bool running = (state == CLAWD_WORKING || state == CLAWD_WAITING ||
                               state == CLAWD_DONE);
-        draw_name(tc, BSP_LCD_H_RES / 2, NAME_Y, NAME_LINE_H, focus->name, BSP_LCD_H_RES - 40,
-                  NAME_SCALE, COL_TEXT);
+        layout_name(tc, BSP_LCD_H_RES / 2, NAME_Y, NAME_LINE_H, focus->name,
+                    BSP_LCD_H_RES - 40, NAME_SCALE, COL_TEXT);
         text_draw_center(tc, BSP_LCD_H_RES / 2, VERB_Y, verb,
                         TEXT_SCALE, running ? COL_TEXT : COL_VERB);
     } else {
-        draw_name(tc, BSP_LCD_H_RES / 2, NAME_Y, NAME_LINE_H, "no active session",
-                  BSP_LCD_H_RES - 40, NAME_SCALE, COL_VERB);
+        layout_name(tc, BSP_LCD_H_RES / 2, NAME_Y, NAME_LINE_H, "no active session",
+                    BSP_LCD_H_RES - 40, NAME_SCALE, COL_VERB);
     }
 
     /* 底部四条等距 */
@@ -427,15 +432,10 @@ void admin_page_draw(uint16_t *fb, const text_canvas_t *tc, const model_t *m,
 
         char name[SESSION_NAME_LEN];
         snprintf(name, sizeof(name), "%s", s->name[0] != '\0' ? s->name : "(unnamed)");
-        const int avail = word_x - ADMIN_NAME_X - 12;
-        int scale = TEXT_SCALE;
-        while (scale > 1 && text_width(name, scale) > avail) scale--;
-        /* 缩到最小还放不下就截断，宁可少几个字也不要压到状态词上 */
-        while (name[0] != '\0' && text_width(name, scale) > avail) {
-            name[strlen(name) - 1] = '\0';
-        }
-        text_draw(tc, ADMIN_NAME_X, y + (TEXT_SCALE - scale) * 3, name, scale,
-                  s->status == SESS_IDLE ? COL_VERB : COL_TEXT);
+        /* **字号固定**，放不下就折两行——之前是逐档缩小，于是正在干活的那个
+         * 项目（名字往往更长）字就变小了，同一列大小不一，界面很不稳。 */
+        layout_name(tc, -ADMIN_NAME_X, y, ADMIN_LINE_H, name, word_x - ADMIN_NAME_X - 12,
+                    TEXT_SCALE, s->status == SESS_IDLE ? COL_VERB : COL_TEXT);
     }
 
     if (total > ADMIN_ROW_MAX) {

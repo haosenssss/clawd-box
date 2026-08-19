@@ -21,8 +21,10 @@ uint32_t session_page_signature(const model_t *m, const session_t *focus,
 
 /* 管理页列表的行几何。pager 要靠它把点按的 y 映射回是哪一行。 */
 #define ADMIN_ROW_Y0 84
-#define ADMIN_ROW_DY 38
-#define ADMIN_ROW_MAX 6
+#define ADMIN_ROW_DY 46
+/* 名字折两行时的行距。行距要留得下两行，否则会压到下一条会话 */
+#define ADMIN_LINE_H 20
+#define ADMIN_ROW_MAX 5
 
 /** 管理页：全部会话一览 + 额度总览。 */
 void admin_page_draw(uint16_t *fb, const text_canvas_t *tc, const model_t *m,
