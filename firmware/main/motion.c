@@ -86,3 +86,85 @@ bool motion_step(motion_t *m, bool have_accel, float ax, float ay, float dt)
     m->y = clampf(m->y + m->vy * dt, -MOTION_MAX_PX, MOTION_MAX_PX);
     return shook;
 }
+
+/* ------------------------------------------------------------------ *
+ * 沿边框爬行
+ * ------------------------------------------------------------------ */
+
+/* 重力到切向加速度的换算。数值定得让"歪 45 度"能在两秒内走完一条边。 */
+#define WALK_GAIN 900.0f
+/* 阻尼。太小会在最低点来回荡个不停，太大就推不动。 */
+#define WALK_DAMP 2.6f
+#define WALK_MAX_V 420.0f
+
+void walk_init(walk_t *w)
+{
+    w->s = 0.0f;
+    w->v = 0.0f;
+    w->started = false;
+}
+
+void walk_step(walk_t *w, bool have_accel, float ax, float ay, float dt, int screen_w,
+               int screen_h, int inset, float *out_x, float *out_y, float *out_rot)
+{
+    const float W = (float)(screen_w - 2 * inset);
+    const float H = (float)(screen_h - 2 * inset);
+    const float P = 2.0f * (W + H);
+    if (P <= 0.0f) return;
+
+    if (!w->started) {
+        /* 从底边中点出发——那是"站在地上"的默认姿势 */
+        w->s = W + H + W * 0.5f;
+        w->started = true;
+    }
+
+    if (dt > 0.05f) dt = 0.05f;
+
+    /* 当前所在的边，以及该边的切线方向（沿 s 增大的方向） */
+    float s = fmodf(w->s, P);
+    if (s < 0.0f) s += P;
+
+    float tx, ty;
+    if (s < W)                { tx = 1.0f;  ty = 0.0f;  }   /* 顶边，向右 */
+    else if (s < W + H)       { tx = 0.0f;  ty = 1.0f;  }   /* 右边，向下 */
+    else if (s < 2.0f * W + H){ tx = -1.0f; ty = 0.0f;  }   /* 底边，向左 */
+    else                      { tx = 0.0f;  ty = -1.0f; }   /* 左边，向上 */
+
+    if (have_accel) {
+        /*
+         * **只取切向分量。** 法向的那一半被边框接住了——
+         * 这就是为什么它贴着边走而不是掉下去。
+         * 屏幕的 y 轴向下，重力 az 为负时板子正面朝上；
+         * 这里只用 x/y 两轴，正好对应屏幕平面内的倾斜。
+         */
+        const float at = (ax * tx + ay * ty) * WALK_GAIN;
+        w->v += (at - WALK_DAMP * w->v) * dt;
+    } else {
+        w->v -= WALK_DAMP * w->v * dt;
+    }
+    if (w->v > WALK_MAX_V) w->v = WALK_MAX_V;
+    if (w->v < -WALK_MAX_V) w->v = -WALK_MAX_V;
+    w->s = s + w->v * dt;
+
+    s = fmodf(w->s, P);
+    if (s < 0.0f) s += P;
+
+    /* 落点与朝向：脚踩在边上，四条边各差 90 度 */
+    if (s < W) {
+        *out_x = (float)inset + s;
+        *out_y = (float)inset;
+        *out_rot = (float)M_PI;             /* 顶边：倒挂 */
+    } else if (s < W + H) {
+        *out_x = (float)(screen_w - inset);
+        *out_y = (float)inset + (s - W);
+        *out_rot = -(float)M_PI / 2.0f;     /* 右边：脚朝右 */
+    } else if (s < 2.0f * W + H) {
+        *out_x = (float)(screen_w - inset) - (s - W - H);
+        *out_y = (float)(screen_h - inset);
+        *out_rot = 0.0f;                    /* 底边：正常站立 */
+    } else {
+        *out_x = (float)inset;
+        *out_y = (float)(screen_h - inset) - (s - 2.0f * W - H);
+        *out_rot = (float)M_PI / 2.0f;      /* 左边：脚朝左 */
+    }
+}

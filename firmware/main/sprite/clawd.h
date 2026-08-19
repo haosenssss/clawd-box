@@ -57,6 +57,8 @@ typedef struct {
     uint32_t elapsed_ms;
 
     /* 重力位移（像素），由 IMU 弹簧物理给出。上限应由调用方限制在 ±24。 */
+    /** 整体旋转（弧度），绕脚底支点。沿边框爬行时用来让脚踩在边上。 */
+    float world_rot;
     float tilt_x;
     float tilt_y;
 

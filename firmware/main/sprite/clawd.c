@@ -444,27 +444,25 @@ static void props_macbook(const clawd_canvas_t *canvas, const view_t *v, float b
     (void)arm_l_rot;
     (void)arm_r_rot;
 
-    /* 机身：近边宽、远边窄的梯形 = 一张朝远处收进去的桌面 */
-    put_unit_quad(canvas, v,
-                  (const float[]){MAC_DECK_FAR_X0, MAC_DECK_FAR_X1, MAC_DECK_NEAR_X1,
-                                  MAC_DECK_NEAR_X0},
-                  (const float[]){MAC_DECK_FAR_Y, MAC_DECK_FAR_Y, MAC_DECK_NEAR_Y,
-                                  MAC_DECK_NEAR_Y},
-                  bdy, AL_HI);
-    /* 近边一条暗线收口，桌面才有厚度 */
-    put_unit_quad(canvas, v,
-                  (const float[]){MAC_DECK_NEAR_X0, MAC_DECK_NEAR_X1, MAC_DECK_NEAR_X1,
-                                  MAC_DECK_NEAR_X0},
-                  (const float[]){MAC_DECK_NEAR_Y, MAC_DECK_NEAR_Y, MAC_DECK_NEAR_Y + 0.22f,
-                                  MAC_DECK_NEAR_Y + 0.22f},
-                  bdy, AL_EDGE);
-
-    /* 屏幕：立在远边上，上宽下窄且整体右偏 = 四分之三视角 */
+    /*
+     * **只画一个斜的外壳面。**
+     * 键盘面是朝着角色的，也就是朝远处铺——从观众这一侧看，
+     * 它整个藏在屏幕背后，一点都露不出来。先前还画了一块大平板摆在下面，
+     * 那等于把一张本该看不见的桌面硬翻到了正面，怎么调都别扭。
+     */
     put_unit_quad(canvas, v,
                   (const float[]){MAC_LID_TOP_X0, MAC_LID_TOP_X1, MAC_LID_BOT_X1,
                                   MAC_LID_BOT_X0},
                   (const float[]){MAC_LID_TOP_Y, MAC_LID_TOP_Y, MAC_LID_BOT_Y, MAC_LID_BOT_Y},
                   bdy, AL_MID);
+
+    /* 底沿一条暗边 = 机身的厚度，也是唯一露得出来的一点点键盘面 */
+    put_unit_quad(canvas, v,
+                  (const float[]){MAC_LID_BOT_X0, MAC_LID_BOT_X1, MAC_LID_BOT_X1,
+                                  MAC_LID_BOT_X0},
+                  (const float[]){MAC_LID_BOT_Y, MAC_LID_BOT_Y, MAC_LID_BOT_Y + 0.26f,
+                                  MAC_LID_BOT_Y + 0.26f},
+                  bdy, AL_EDGE);
 
     /* 顶边一条亮线：屏幕边框的高光。不画发光——纯黑背景上那道光
      * 只会变成一条突兀的白杠，反而把这台小机器的形压散了。 */
