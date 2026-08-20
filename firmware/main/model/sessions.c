@@ -8,9 +8,10 @@
 #define ACTIVE_WINDOW_MS (12U * 60U * 60U * 1000U)
 
 /* 一次性状态的最短保持时长——防止状态抖动导致动画闪烁 */
-/* 庆祝动画的最短保持。一个循环 1 秒，1.2 秒等于刚跳完一下就切走，
- * 拉到 3.6 秒才演得完整。改这里必须同步 clawd_done_finished()。 */
-#define DONE_HOLD_MS 3600U
+/* 庆祝动画的最短保持。**必须是动画周期 1000ms 的整数倍**——
+ * 取 3600 会停在相位 0.6，那一帧人正腾空，切走时等于从半空瞬移回地面。
+ * 改这里必须同步 clawd_done_finished()。 */
+#define DONE_HOLD_MS 4000U
 
 /* 闲置多久算睡着 */
 #define IDLE_TO_SLEEP_MS 60000U

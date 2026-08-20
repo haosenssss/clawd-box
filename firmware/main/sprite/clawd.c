@@ -564,7 +564,13 @@ static void props_headphones(const clawd_canvas_t *canvas, const view_t *v, floa
  * 做成腰间一条小板子既不像，也撑不起那两张碟。
  * 台面盖住腿是对的——真实的 DJ 就是只露上半身站在台后。
  */
-#define DECK_FAR_Y 11.50f
+/* 远沿从 11.50 下移到 11.85，正面板从 1.40 削到 0.75：
+ * 台子整体变矮，身体多露出来一截。
+ *
+ * 能下移多少是被**手臂够得到的深度**卡死的：右臂绕肩 (13,10) 转、
+ * 臂长 2，指尖最低只到 y≈12.24。碟面顶边必须高于远沿、又要低到
+ * 手压得住，两头一夹就只剩这 0.35 个单位的余量。 */
+#define DECK_FAR_Y 11.85f
 #define DECK_NEAR_Y 13.90f
 /* 合成框只到 x=-2..17（clawd_bounds 的 margin=2）。原来台子画到 -3.5..18.5，
  * 两端直接被框切平——屏幕上是一条竖直的断口。台面可以比角色宽，
@@ -575,11 +581,11 @@ static void props_headphones(const clawd_canvas_t *canvas, const view_t *v, floa
 #define DECK_NEAR_X1 16.85f
 #define DISC_L_X 4.20f
 #define DISC_R_X 11.60f
-#define DISC_Y 12.50f
+#define DISC_Y 12.78f
 /* 半径比 2.5 : 1.15 ≈ 2.2:1，正好等于台面自身的透视压缩比——
  * 碟和台子的"倾角"必须一致，差一点就会显得碟是斜插在台面上的。 */
-#define DISC_RX 2.50f
-#define DISC_RY 1.15f
+#define DISC_RX 2.40f
+#define DISC_RY 0.88f
 
 /** 一张唱片：碟体 + 一圈纹路 + 标签 + 一个转动的白点。
  *  那个白点是**唯一能读出"它在转"**的东西——没有它，碟就是个静止的椭圆。 */
@@ -616,8 +622,8 @@ static void props_decks(const clawd_canvas_t *canvas, const view_t *v, uint32_t 
     /* 台子正面 */
     put_unit_quad(canvas, v,
                   (const float[]){DECK_NEAR_X0, DECK_NEAR_X1, DECK_NEAR_X1, DECK_NEAR_X0},
-                  (const float[]){DECK_NEAR_Y, DECK_NEAR_Y, DECK_NEAR_Y + 1.40f,
-                                  DECK_NEAR_Y + 1.40f},
+                  (const float[]){DECK_NEAR_Y, DECK_NEAR_Y, DECK_NEAR_Y + 1.10f,
+                                  DECK_NEAR_Y + 1.10f},
                   0.0f, DECK_EDGE);
 
     /* 两张碟 */
@@ -1192,9 +1198,13 @@ uint32_t clawd_cycle_ms(clawd_state_t state)
     }
 }
 
-/* 庆祝要演满三个多循环（每循环 1s）。1.2 秒时刚蹦跶一下就切走了，
- * 观感是"没庆祝完就被打断"。必须和 sessions.c 的 DONE_HOLD_MS 保持一致。 */
-bool clawd_done_finished(uint32_t elapsed_ms) { return elapsed_ms >= 3600; }
+/*
+ * **必须是动画周期（1000ms）的整数倍。**
+ * 设成 3600 时正好停在相位 0.6——那一帧人是腾空的（translateY -10），
+ * 状态一切就从半空瞬移回地面，看着像"跳完落在了奇怪的位置"。
+ * 四个整循环，落地才收。改这里必须同步 sessions.c 的 DONE_HOLD_MS。
+ */
+bool clawd_done_finished(uint32_t elapsed_ms) { return elapsed_ms >= 4000; }
 
 clawd_rect_t clawd_bounds(const clawd_draw_t *p)
 {
@@ -1285,8 +1295,14 @@ void clawd_draw(const clawd_canvas_t *canvas, const clawd_draw_t *p)
     const rect_t *arm_l = pose.body_form == 2 ? &R_SLEEP_ARM_L : &R_ARM_L;
     const rect_t *arm_r = pose.body_form == 2 ? &R_SLEEP_ARM_R : &R_ARM_R;
 
-    /* 腿（各自带一点颤抖旋转，支点在腿根） */
-    for (int i = 0; i < 4; i++) {
+    /*
+     * 腿（各自带一点颤抖旋转，支点在腿根）。
+     *
+     * **打碟时不画腿**：人站在台子后面，腿完整地被台面挡着，
+     * 唯一能让它露出来的情况是身体跟着拍子下沉时脚穿过地面线——
+     * 那是穿帮不是效果。不画既去掉穿帮，也省四个图元。
+     */
+    for (int i = 0; i < (p->state == CLAWD_WORKING ? 0 : 4); i++) {
         const rect_t *leg = &legs[i];
         transform_rect(&view, leg, leg->x + leg->w * 0.5f, leg->y, pose.leg_rot[i],
                        pose.body_form == 2 ? pose.body_sx : 1.0f,
