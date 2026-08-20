@@ -11,6 +11,7 @@
 
 #include "cJSON.h"
 #include "driver/uart.h"
+#include "driver/usb_serial_jtag.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -28,10 +29,26 @@ static const char *TAG = "link";
 #define LINK_LINE_MAX 512 /* 与主机侧 MAX_FRAME_BYTES 一致 */
 
 static model_t *s_model = NULL;
-static char s_line[LINK_LINE_MAX];
-static size_t s_len = 0;
-static bool s_overflow = false;
 static uint32_t s_dropped = 0;
+
+/*
+ * 板子有两个 USB 口：CH343P 桥（走 UART0）和 ESP32-S3 自带的 USB-Serial-JTAG。
+ * 日志两个口都会输出（ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG），
+ * 于是插错口时"看得见日志、收不到帧"，现象酷似死机——实际只是没人读那个口。
+ * 两个口都收，插哪个都能用。
+ *
+ * 每个来源一份独立的行装配器：两路字节流绝不能拼进同一个缓冲区，
+ * 否则半行 A 接上半行 B，解析出来的是彻头彻尾的假数据。
+ */
+typedef struct {
+    char buf[LINK_LINE_MAX];
+    size_t len;
+    bool overflow;
+} line_asm_t;
+
+static line_asm_t s_uart_line;
+static line_asm_t s_usb_line;
+static bool s_usb_ready = false;
 
 static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 
@@ -142,32 +159,48 @@ static void apply_frame(const cJSON *root)
     }
 }
 
-static void handle_line(void)
+static void handle_line(line_asm_t *a)
 {
-    if (s_overflow) {
-        s_overflow = false;
-        s_len = 0;
+    if (a->overflow) {
+        a->overflow = false;
+        a->len = 0;
         s_dropped++;
         return;
     }
-    if (s_len == 0) return;
-    s_line[s_len] = '\0';
+    if (a->len == 0) return;
+    a->buf[a->len] = '\0';
 
     /* 只认 JSON 行，其余（比如我们自己的日志回显）直接忽略 */
-    if (s_line[0] == '{') {
-        cJSON *root = cJSON_Parse(s_line);
+    if (a->buf[0] == '{') {
+        cJSON *root = cJSON_Parse(a->buf);
         if (root != NULL) {
-            ESP_LOGD(TAG, "帧: %s", s_line);
+            ESP_LOGD(TAG, "帧: %s", a->buf);
             apply_frame(root);
             cJSON_Delete(root);
         } else {
-            ESP_LOGW(TAG, "解析失败(%u字节): %.80s", (unsigned)s_len, s_line);
+            ESP_LOGW(TAG, "解析失败(%u字节): %.80s", (unsigned)a->len, a->buf);
             s_dropped++;
         }
     } else {
-        ESP_LOGD(TAG, "非JSON行(%u字节): %.40s", (unsigned)s_len, s_line);
+        ESP_LOGD(TAG, "非JSON行(%u字节): %.40s", (unsigned)a->len, a->buf);
     }
-    s_len = 0;
+    a->len = 0;
+}
+
+static void feed(line_asm_t *a, const uint8_t *data, int n)
+{
+    for (int i = 0; i < n; i++) {
+        const char c = (char)data[i];
+        if (c == '\n' || c == '\r') {
+            handle_line(a);
+            continue;
+        }
+        if (a->len < LINK_LINE_MAX - 1) {
+            a->buf[a->len++] = c;
+        } else {
+            a->overflow = true; /* 整行作废，等换行符时丢弃 */
+        }
+    }
 }
 
 static void link_task(void *arg)
@@ -177,26 +210,24 @@ static void link_task(void *arg)
     uint32_t total_bytes = 0;
     uint32_t report_at = 0;
     while (true) {
-        const int n = uart_read_bytes(LINK_UART, chunk, sizeof(chunk), pdMS_TO_TICKS(50));
+        /* UART 阻塞 20ms 兼作整个循环的节拍；USB-JTAG 非阻塞轮询，
+         * 这样任一路来数据都不会被另一路的等待拖住。 */
+        const int n = uart_read_bytes(LINK_UART, chunk, sizeof(chunk), pdMS_TO_TICKS(20));
         if (n > 0) {
             total_bytes += (uint32_t)n;
-            const uint32_t t = now_ms();
-            if (t - report_at > 3000) {
-                report_at = t;
-                ESP_LOGI(TAG, "累计收到 %lu 字节", (unsigned long)total_bytes);
+            feed(&s_uart_line, chunk, n);
+        }
+        if (s_usb_ready) {
+            const int m = usb_serial_jtag_read_bytes(chunk, sizeof(chunk), 0);
+            if (m > 0) {
+                total_bytes += (uint32_t)m;
+                feed(&s_usb_line, chunk, m);
             }
         }
-        for (int i = 0; i < n; i++) {
-            const char c = (char)chunk[i];
-            if (c == '\n' || c == '\r') {
-                handle_line();
-                continue;
-            }
-            if (s_len < LINK_LINE_MAX - 1) {
-                s_line[s_len++] = c;
-            } else {
-                s_overflow = true; /* 整行作废，等换行符时丢弃 */
-            }
+        const uint32_t t = now_ms();
+        if (total_bytes > 0 && t - report_at > 3000) {
+            report_at = t;
+            ESP_LOGI(TAG, "累计收到 %lu 字节", (unsigned long)total_bytes);
         }
     }
 }
@@ -238,11 +269,25 @@ esp_err_t link_start(model_t *model)
     /* 早一点触发排空，别等到 FIFO 快满（默认 120/128）才动 */
     uart_set_rx_full_threshold(LINK_UART, 40);
 
+    /*
+     * 再把自带 USB 口的接收也接上。日志本来就往这个口抄一份，
+     * 不接收的话插这个口就是"有日志、无数据"，很难自查。
+     * 装不上不算致命——CH343P 那条路依然可用。
+     */
+    const usb_serial_jtag_driver_config_t usb_cfg = {
+        .tx_buffer_size = 256,
+        .rx_buffer_size = 2048,
+    };
+    const esp_err_t usb_err = usb_serial_jtag_driver_install(&usb_cfg);
+    s_usb_ready = (usb_err == ESP_OK || usb_err == ESP_ERR_INVALID_STATE);
+    if (!s_usb_ready) ESP_LOGW(TAG, "USB-JTAG 接收未启用: %s", esp_err_to_name(usb_err));
+
     /* 钉到 CPU1：渲染循环跑在 CPU0 且密集读写 PSRAM，同核会把链路任务饿住。 */
     if (xTaskCreatePinnedToCore(link_task, "link", 4096, NULL, 5, NULL, 1) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
-    ESP_LOGI(TAG, "串口链路就绪（沿用控制台波特率）");
+    ESP_LOGI(TAG, "串口链路就绪：UART0%s（沿用控制台波特率）",
+             s_usb_ready ? " + USB-JTAG" : "");
     return ESP_OK;
 }
 
