@@ -274,6 +274,18 @@ esp_err_t audio_init(void)
     ESP_RETURN_ON_ERROR(esp_codec_dev_open(s_dev, &fs), TAG, "打开编解码器失败");
     esp_codec_dev_set_out_vol(s_dev, OUT_VOLUME);
 
+    /*
+     * **open 之后立刻把通道关掉，让稳态统一是"关闭"。**
+     *
+     * esp_codec_dev_open() 内部已经 enable 了 I2S 通道，于是开机后第一次播放时
+     * 播放路径里的 i2s_channel_enable() 会撞上 already-enabled 并打一条 E 日志。
+     * 之后每次 disable 都成功，状态才自己走对——也就是说"第一声"和"后面每一声"
+     * 走的是两条不同的路径。这种不对称迟早会咬人：播放路径依赖 disable 来掐断
+     * DMA（否则残留会被无限轮播，就是当初"音效一直响不停"那个毛病），
+     * 而一个来路不明的 enable 状态正是让 disable 失效的前提。
+     */
+    i2s_channel_disable(s_tx);
+
     /* 110 KB 必须走 PSRAM——内部 RAM 总共才 300 KB 上下，
      * 拿去放一段提示音会把渲染的离屏缓冲挤掉。 */
     s_buf = heap_caps_malloc(MAX_SAMPLES * sizeof(int16_t), MALLOC_CAP_SPIRAM);
