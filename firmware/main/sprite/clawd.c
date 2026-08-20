@@ -643,14 +643,28 @@ static void props_decks(const clawd_canvas_t *canvas, const view_t *v, uint32_t 
                           0.07f, 0.0f, VINYL_MARK);
         }
     }
-    /* 三根竖推子，中间那根跟着搓碟走 */
-    for (int i = 0; i < 3; i++) {
-        const float fx = 6.55f + (float)i * 0.95f;
-        put_unit_rect(canvas, v, fx, 13.00f, 0.13f, 0.62f, 0.0f, DECK_TOP);
-        const float k = (i == 1) ? (0.30f + scratch * 0.34f) : (0.30f + (float)i * 0.20f);
-        put_unit_rect(canvas, v, fx - 0.14f, 13.00f + k * 0.50f, 0.40f, 0.16f, 0.0f,
-                      HP_MID);
-    }
+    /*
+     * 交叉推子：**横着放，左右扫。**
+     *
+     * 上一版做成三根竖槽、滑块上下走——台面是朝远处铺开的平面，
+     * 竖槽画成轴对齐矩形等于把它贴在了一堵墙上，和当初碟片看着像
+     * "立着的轮子"是同一个毛病：物件没有跟随所在平面的透视。
+     * 横线在透视平面上本来就不变形，所以横推子不需要额外校正就成立。
+     *
+     * 而且它跟着**搓碟的同一个量**走。真实的搓碟就是一手推碟、
+     * 一手甩交叉推子（crab/transformer），两只手同源才不像各动各的。
+     */
+    const float xf_x0 = 6.30f, xf_w = 3.10f, xf_y = 13.24f;
+    put_unit_rect(canvas, v, xf_x0, xf_y, xf_w, 0.24f, 0.0f, DECK_EDGE);
+    put_unit_rect(canvas, v, xf_x0, xf_y + 0.08f, xf_w, 0.08f, 0.0f, DECK_TOP);
+    float xf = 0.5f + scratch * 0.45f;
+    if (xf < 0.0f) xf = 0.0f;
+    if (xf > 1.0f) xf = 1.0f;
+    const float knob_w = 0.46f;
+    put_unit_rect(canvas, v, xf_x0 + xf * (xf_w - knob_w), xf_y - 0.16f, knob_w, 0.56f,
+                  0.0f, HP_MID);
+    put_unit_rect(canvas, v, xf_x0 + xf * (xf_w - knob_w) + 0.16f, xf_y - 0.16f, 0.10f,
+                  0.56f, 0.0f, HP_HI);
     /* 电平灯跟着拍子跑 */
     const int level = 1 + (int)(scratch * 5.0f);
     for (int i = 0; i < 6; i++) {
@@ -1178,7 +1192,9 @@ uint32_t clawd_cycle_ms(clawd_state_t state)
     }
 }
 
-bool clawd_done_finished(uint32_t elapsed_ms) { return elapsed_ms >= 1200; }
+/* 庆祝要演满三个多循环（每循环 1s）。1.2 秒时刚蹦跶一下就切走了，
+ * 观感是"没庆祝完就被打断"。必须和 sessions.c 的 DONE_HOLD_MS 保持一致。 */
+bool clawd_done_finished(uint32_t elapsed_ms) { return elapsed_ms >= 3600; }
 
 clawd_rect_t clawd_bounds(const clawd_draw_t *p)
 {

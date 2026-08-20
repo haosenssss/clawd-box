@@ -8,7 +8,9 @@
 #define ACTIVE_WINDOW_MS (12U * 60U * 60U * 1000U)
 
 /* 一次性状态的最短保持时长——防止状态抖动导致动画闪烁 */
-#define DONE_HOLD_MS 1200U
+/* 庆祝动画的最短保持。一个循环 1 秒，1.2 秒等于刚跳完一下就切走，
+ * 拉到 3.6 秒才演得完整。改这里必须同步 clawd_done_finished()。 */
+#define DONE_HOLD_MS 3600U
 
 /* 闲置多久算睡着 */
 #define IDLE_TO_SLEEP_MS 60000U
@@ -165,7 +167,8 @@ int model_active_count(const model_t *m)
  * （不是看 done_pending 标志），因为主机只会为**当前聚焦**的会话清那个标志，
  * 非聚焦会话的标志没人清，用它当条件会让完成过的会话永远赖在环里。
  */
-#define DONE_LINGER_MS 4000U
+/* 必须大于 DONE_HOLD_MS，否则会话会在庆祝演完之前先被移出轮播环 */
+#define DONE_LINGER_MS 5500U
 
 static bool in_ring(const session_t *s, uint32_t now_ms)
 {
