@@ -253,3 +253,33 @@ g=(-0.02, 0.07, -1.00)
 clang -O1 -I main -o /tmp/prev ../tools/preview/preview.c main/sprite/clawd.c -lm
 /tmp/prev /tmp/p.raw          # 输出 "宽 高\n" + RGB888
 ```
+
+## 15. 板子有两个 USB 口，日志两个都出、数据只进一个
+
+微雪这块板子有两个 USB 口：CH343P 桥（`cu.usbmodem<序列号>`，走 UART0）和
+ESP32-S3 自带的 USB-Serial-JTAG（`cu.usbmodem101`，位置命名）。
+
+`CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y` 让**日志两个口都输出**，
+但固件的链路任务原本只读 `UART_NUM_0`。于是插错口时的现象是：
+
+    日志刷得好好的 → 帧一个不收 → 永远 no active
+
+看起来像板子死机或者主机挂了，实际只是没人读那个口。**日志能出来不等于数据能进去**——
+这两条路在硬件上是分开的。
+
+对策：两个口都收，每个来源一份独立的行装配器（两路字节流拼进同一个缓冲区
+会产生"半行 A + 半行 B"的假帧，比丢帧危险得多）。
+
+分辨插的是哪个口：
+
+    system_profiler SPUSBDataType | grep -E "CH34|USB JTAG"
+    # Espressif 0x303a:0x1001 = 自带口；1a86:55d3 = CH343P 桥
+
+### 附带教训：别急着认罪
+
+改完固件 40 秒后 USB 掉了且再没枚举，我第一反应是"我把 USB 外设写死了"，
+直接 revert。实际是用户同时在拔线换到显示器的 USB 口上——时间戳对得上。
+板子重新枚举后跑的**还是那版新固件**，一切正常。
+
+掉线前后各看一眼「板子在不在 USB 树里」「重新枚举后跑的是哪版固件」，
+比对着时间线猜快得多。
