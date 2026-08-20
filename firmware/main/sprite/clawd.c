@@ -510,12 +510,14 @@ static void put_arc(const clawd_canvas_t *canvas, const view_t *v, float cx, flo
  */
 #define HP_CUP_L_X 1.95f
 #define HP_CUP_R_X 13.05f
-#define HP_CUP_Y 8.20f
+/* 罩心压在 9.0：脑袋是 6~13，中线在 9.5。原来放 8.2，整副耳麦明显偏上，
+ * 看着像架在额头上而不是扣在耳朵上。 */
+#define HP_CUP_Y 9.00f
 #define HP_CUP_RX 1.52f
 #define HP_CUP_RY 1.88f
 #define HP_ARC_CX 7.50f
-#define HP_ARC_CY 13.20f
-#define HP_ARC_R 8.70f
+#define HP_ARC_CY 12.745f
+#define HP_ARC_R 7.845f
 
 static void props_headphones(const clawd_canvas_t *canvas, const view_t *v, float bdy,
                              float press)
@@ -523,13 +525,13 @@ static void props_headphones(const clawd_canvas_t *canvas, const view_t *v, floa
     /* 1) 叉臂先画，等下被耳罩压住上半截——这个遮挡关系正是"夹住"的观感来源 */
     for (int i = 0; i < 2; i++) {
         const float cx = i ? HP_CUP_R_X : HP_CUP_L_X;
-        put_unit_rect(canvas, v, cx - 0.30f, 5.95f, 0.60f, 2.40f, bdy, HP_DARK);
-        put_unit_rect(canvas, v, cx - 0.30f, 5.95f, 0.16f, 2.40f, bdy, HP_HI);
+        put_unit_rect(canvas, v, cx - 0.30f, 6.70f, 0.60f, 2.50f, bdy, HP_DARK);
+        put_unit_rect(canvas, v, cx - 0.30f, 6.70f, 0.16f, 2.50f, bdy, HP_HI);
     }
 
     /* 2) 头梁。厚一点才像 DJ 耳麦，细了就是通勤耳机。 */
-    put_arc(canvas, v, HP_ARC_CX, HP_ARC_CY, HP_ARC_R, 4.021f, 5.404f, 0.62f, bdy, HP_MID);
-    put_arc(canvas, v, HP_ARC_CX, HP_ARC_CY, HP_ARC_R + 0.24f, 4.08f, 5.34f, 0.15f, bdy,
+    put_arc(canvas, v, HP_ARC_CX, HP_ARC_CY, HP_ARC_R, 3.927f, 5.498f, 0.62f, bdy, HP_MID);
+    put_arc(canvas, v, HP_ARC_CX, HP_ARC_CY, HP_ARC_R + 0.24f, 3.99f, 5.44f, 0.15f, bdy,
             HP_HI);
 
     /* 3) 耳罩：竖椭圆的大罩 + 内圈耳垫。press 是手往里压的量，
@@ -564,10 +566,13 @@ static void props_headphones(const clawd_canvas_t *canvas, const view_t *v, floa
  */
 #define DECK_FAR_Y 11.50f
 #define DECK_NEAR_Y 13.90f
-#define DECK_FAR_X0 1.00f
-#define DECK_FAR_X1 14.00f
-#define DECK_NEAR_X0 (-3.50f)
-#define DECK_NEAR_X1 18.50f
+/* 合成框只到 x=-2..17（clawd_bounds 的 margin=2）。原来台子画到 -3.5..18.5，
+ * 两端直接被框切平——屏幕上是一条竖直的断口。台面可以比角色宽，
+ * 但不能比框宽。 */
+#define DECK_FAR_X0 1.70f
+#define DECK_FAR_X1 13.30f
+#define DECK_NEAR_X0 (-1.85f)
+#define DECK_NEAR_X1 16.85f
 #define DISC_L_X 4.20f
 #define DISC_R_X 11.60f
 #define DISC_Y 12.50f
@@ -664,13 +669,18 @@ static void props_decks(const clawd_canvas_t *canvas, const view_t *v, uint32_t 
 
 /* --- 干活：前景的 bling --- */
 
-#define BLING_COUNT 9
-static const float BLING_X[BLING_COUNT] = {-1.2f, 16.3f, 2.4f, 12.8f, -0.4f,
-                                           15.4f, 7.6f,  4.6f, 10.4f};
-static const float BLING_Y[BLING_COUNT] = {5.4f, 6.1f, 4.2f, 4.6f, 9.8f,
-                                           10.6f, 3.6f, 14.6f, 14.9f};
-static const uint32_t BLING_DELAY[BLING_COUNT] = {0,   170, 340, 510, 680,
-                                                  850, 260, 430, 600};
+#define BLING_COUNT 10
+/*
+ * 星光只在**角色周围**闪，不落到台面上。
+ * 台子是块实心器材，星星落在上面读出来是屏幕坏点；
+ * 围着人物闪才是"打在他身上的光"。所以 y 全部压在 11 以上（台面之上）。
+ */
+static const float BLING_X[BLING_COUNT] = {-1.3f, 16.2f, 1.1f, 13.9f, -0.5f,
+                                           15.5f, 7.5f,  3.6f, 11.4f, 5.9f};
+static const float BLING_Y[BLING_COUNT] = {6.2f, 6.8f, 4.3f, 4.7f, 9.6f,
+                                           9.9f, 3.5f, 5.1f, 5.4f, 3.9f};
+static const uint32_t BLING_DELAY[BLING_COUNT] = {0,   150, 300, 450, 600,
+                                                  750, 240, 390, 540, 690};
 
 /** 四角星。**不是圆点**——圆点在这个尺度上只会读成坏点，
  *  两条交叉的尖刺才有"闪"的意思。 */
@@ -684,7 +694,23 @@ static void draw_bling(const clawd_canvas_t *canvas, const view_t *v, float x, f
                   (const float[]){y, y - lo, y, y + lo}, 0.0f, col);
 }
 
+/** 一个 ♪：符头 + 符干 + 旗子。炫彩现在靠它和台面上的灯来体现。 */
+static void draw_note(const clawd_canvas_t *canvas, const view_t *v, float x, float y,
+                      float s, uint16_t col)
+{
+    put_unit_ellipse(canvas, v, x, y, 0.30f * s, 0.24f * s, 0.0f, col);
+    put_unit_rect(canvas, v, x + 0.19f * s, y - 1.10f * s, 0.15f * s, 1.16f * s, 0.0f, col);
+    const float fx = x + 0.34f * s, fy = y - 1.10f * s;
+    put_unit_quad(canvas, v, (const float[]){fx, fx + 0.44f * s, fx + 0.30f * s, fx},
+                  (const float[]){fy, fy + 0.30f * s, fy + 0.64f * s, fy + 0.34f * s}, 0.0f,
+                  col);
+}
+
 #define BLING_PERIOD 1040
+#define NOTE_COUNT 4
+#define NOTE_LIFE 2080
+/* 从台子两侧升起，左右交替，颜色轮着换——炫彩靠它 */
+static const float NOTE_X0[NOTE_COUNT] = {14.6f, 0.6f, 15.4f, -0.2f};
 
 static void props_working(const clawd_canvas_t *canvas, const view_t *v, uint32_t t,
                           float bdy)
@@ -695,10 +721,26 @@ static void props_working(const clawd_canvas_t *canvas, const view_t *v, uint32_
         const float f = (float)ph / (float)BLING_PERIOD;
         if (f > 0.42f) continue; /* 大部分时间是灭的，才叫"闪" */
         const float g = f / 0.42f;
-        const float s = sinf(g * 3.1416f); /* 起落对称的一次明灭 */
-        if (s < 0.10f) continue;
+        const float sz = sinf(g * 3.1416f); /* 起落对称的一次明灭 */
+        if (sz < 0.10f) continue;
         const uint16_t col = (i % 3 == 0) ? LIGHT_B : ((i % 3 == 1) ? VINYL_MARK : LIGHT_A);
-        draw_bling(canvas, v, BLING_X[i], BLING_Y[i], s * 1.15f, col);
+        draw_bling(canvas, v, BLING_X[i], BLING_Y[i], sz * 1.15f, col);
+    }
+
+    /* 音符从台子两侧飘上去。生灭都靠尺寸而不是透明度：
+     * 这个尺度的小图形淡出读不出来，缩小才读得出"飘远了"。 */
+    const uint16_t NOTE_COL[4] = {LIGHT_A, LIGHT_B, LIGHT_C, LIGHT_D};
+    for (int i = 0; i < NOTE_COUNT; i++) {
+        const uint32_t ph = (t + (uint32_t)i * (NOTE_LIFE / NOTE_COUNT)) % NOTE_LIFE;
+        const float f = (float)ph / (float)NOTE_LIFE;
+        float sz = 1.0f;
+        if (f < 0.12f) sz = f / 0.12f;
+        else if (f > 0.68f) sz = (1.0f - f) / 0.32f;
+        if (sz < 0.12f) continue;
+        const float side = (i & 1) ? -1.0f : 1.0f;
+        const float x = NOTE_X0[i] + side * (0.9f * f) + sinf(f * 7.0f) * 0.45f;
+        const float y = 11.6f - 7.4f * f;
+        draw_note(canvas, v, x, y, sz * 1.05f, NOTE_COL[i]);
     }
 }
 
@@ -958,7 +1000,7 @@ static void pose_working(pose_t *p, uint32_t t)
     p->ear_press = ease_keys(PRESS, 4, phase_of(t, BEAT_MS * 2));
     /* 74° 是解出来的：手臂外端要正好压在罩子的下半边（罩心 (1.95,7.95) 半径 1.6）。
      * 58° 时外端甩到 x=0.09，掉在罩子左边的黑底上，读出来是块浮空的方块。 */
-    p->arm_l_rot = (74.0f + p->ear_press * 7.0f) * (float)M_PI / 180.0f;
+    p->arm_l_rot = (66.0f + p->ear_press * 7.0f) * (float)M_PI / 180.0f;
 
     /* 右手搓碟：一拍两下（baby scratch），推出去再拽回来。 */
     static const key_t SCRATCH[] = {
