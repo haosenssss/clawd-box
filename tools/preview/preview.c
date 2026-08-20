@@ -10,8 +10,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifndef W
 #define W 240
+#endif
+#ifndef H
 #define H 240
+#endif
 #define COLS 6
 
 static void rgb565_to_rgb888(uint16_t c, unsigned char *out)
@@ -25,6 +29,8 @@ static void rgb565_to_rgb888(uint16_t c, unsigned char *out)
 int main(int argc, char **argv)
 {
     const char *out_path = argc > 1 ? argv[1] : "/tmp/clawd_preview.raw";
+    /* 第二个参数：只渲染这一个状态（0..4），列数翻倍看细节 */
+    const int only = argc > 2 ? atoi(argv[2]) : -1;
 
     const clawd_state_t states[] = {CLAWD_WORKING, CLAWD_DONE, CLAWD_WAITING, CLAWD_IDLE,
                                     CLAWD_SLEEPING};
@@ -32,14 +38,17 @@ int main(int argc, char **argv)
     /* 每个状态取 6 个时间点，覆盖一个完整周期 */
     /* **每个状态按自己的周期采样。** 统一用 1 秒窗口的话，
      * 9 秒的张望循环在里面根本看不出动静，会误判成"这个状态没动画"。 */
-    const uint32_t period[] = {720, 1000, 6000, 9000, 4500};
+    const uint32_t period[] = {2080, 1000, 6000, 9000, 4500};
 
-    const int sheet_w = W * COLS, sheet_h = H * nstates;
+    const int cols = only >= 0 ? COLS * 2 : COLS;
+    const int rows = only >= 0 ? 1 : nstates;
+    const int sheet_w = W * cols, sheet_h = H * rows;
     uint16_t *fb = calloc((size_t)W * H, sizeof(uint16_t));
     unsigned char *sheet = calloc((size_t)sheet_w * sheet_h * 3, 1);
 
-    for (int s = 0; s < nstates; s++) {
-        for (int c = 0; c < COLS; c++) {
+    for (int r = 0; r < rows; r++) {
+        const int s = only >= 0 ? only : r;
+        for (int c = 0; c < cols; c++) {
             for (int i = 0; i < W * H; i++) fb[i] = 0; /* 纯黑背景，和板子一致 */
 
             const clawd_canvas_t canvas = {.pixels = fb, .width = W, .height = H};
@@ -48,7 +57,7 @@ int main(int argc, char **argv)
                 .baseline_y = 190,
                 .px_per_unit = 14.9f * (float)W / 480.0f * 2.0f, /* 与板子同比例 */
                 .state = states[s],
-                .elapsed_ms = period[s] * (uint32_t)c / COLS,
+                .elapsed_ms = period[s] * (uint32_t)c / (uint32_t)cols,
                 .body_color = clawd_rgb565(0xD7, 0x77, 0x57),
                 .eye_color = 0,
                 .shadow_color = 0,
@@ -57,7 +66,7 @@ int main(int argc, char **argv)
 
             for (int y = 0; y < H; y++) {
                 for (int x = 0; x < W; x++) {
-                    const int sx = c * W + x, sy = s * H + y;
+                    const int sx = c * W + x, sy = r * H + y;
                     rgb565_to_rgb888(fb[y * W + x], sheet + ((size_t)sy * sheet_w + sx) * 3);
                 }
             }

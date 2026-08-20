@@ -20,10 +20,11 @@
 static const char *TAG = "audio";
 
 #define SAMPLE_RATE BSP_AUDIO_SAMPLE_RATE
-#define OUT_VOLUME 70
+#define OUT_VOLUME 78
 
-/* 一段提示音最长 500ms。够放三个音符，也不至于长到烦人。 */
-#define MAX_MS 1300
+/* 一段提示音最长 2.2 秒。留足余量给最后那个长音的余韵——
+ * 缓冲不够的话尾音会被硬切，听起来就是"响到一半没了"。 */
+#define MAX_MS 2200
 #define TONE_SAMPLES (SAMPLE_RATE * MAX_MS / 1000)
 
 /*
@@ -38,8 +39,17 @@ static const char *TAG = "audio";
 #define SILENCE_SAMPLES 3000
 #define MAX_SAMPLES (TONE_SAMPLES + SILENCE_SAMPLES)
 
+/*
+ * ms 是**往后推进的时间**，不是音符的长度（长度由余韵决定）。于是：
+ *   {440, 200}  普通音，响完往后走 200ms
+ *   {0,   120}  休止，只推进时间
+ *   {440, 0}    **和弦音**：和下一个音同时起振，自己不推进时间
+ *   {0,   0}    结束
+ * 和弦是这次加的——单音一个个排下去只能是"嘀嘀嘀"，
+ * 收尾处几个音一起响才有"落定"的分量。
+ */
 typedef struct {
-    float freq;   /* Hz，0 = 静音间隔 */
+    float freq;
     uint16_t ms;
 } note_t;
 
@@ -55,18 +65,29 @@ typedef struct {
  * 原来三个短音总共 280ms，听起来像"嘀"了一下就没了；
  * 拉到 700ms 并让尾音自然衰减，才有"一件事收尾了"的分量。 */
 static const note_t SEQ_DONE[] = {
-    {523.25f, 110}, {659.25f, 110}, {783.99f, 130}, {1046.50f, 340}, {0, 0}};
+    {523.25f, 95},  {659.25f, 95},  {783.99f, 110}, {880.00f, 130},
+    /* 落回高八度主音，同时点亮下方的 E5 和 G5——一个完整的 C 和弦收尾。
+     * 五声音阶里这三个音叠在一起不会有任何刺耳的音程。 */
+    {659.25f, 0},   {783.99f, 0},   {1046.50f, 700},
+    {0, 0}};
 
 /* 等你输入：A5 - D6 上行两次。上行=询问，重复=需要你动手。
  * 两遍之间留一点静默，像敲两下门而不是连成一串。 */
 static const note_t SEQ_NEEDS[] = {
-    {880.00f, 120}, {1174.66f, 170}, {0.0f, 110},
-    {880.00f, 120}, {1174.66f, 220}, {0, 0}};
+    {880.00f, 120}, {1174.66f, 175}, {0.0f, 115},
+    {880.00f, 120}, {1174.66f, 175}, {0.0f, 115},
+    /* 第三遍收在 A5+D6 上（纯四度，稳）。用 D6+E6 会撞出大二度，
+     * 那是"警报"的听感，不是"叫你一声"。 */
+    {880.00f, 110}, {880.00f, 0}, {1174.66f, 420},
+    {0, 0}};
 
 /* 限额告急：G4 - E4 - C4 下行三音。下行且低，是"出问题"的通用听感。
  * 放慢、放长，让它听起来像一声叹息而不是警报。 */
 static const note_t SEQ_LIMIT[] = {
-    {392.00f, 170}, {329.63f, 170}, {261.63f, 380}, {0, 0}};
+    {392.00f, 175}, {329.63f, 175}, {293.66f, 175},
+    /* 落到 G3+C4，低而空，像一口叹出去的气 */
+    {196.00f, 0},   {261.63f, 760},
+    {0, 0}};
 
 static const note_t *sequence_for(sound_t s)
 {
@@ -108,7 +129,7 @@ static size_t render(const note_t *seq, int16_t *out, size_t cap)
     for (size_t i = 0; i < cap; i++) out[i] = 0;
 
     size_t at = 0;
-    for (const note_t *note = seq; note->ms != 0; note++) {
+    for (const note_t *note = seq; !(note->freq == 0.0f && note->ms == 0); note++) {
         const size_t step = (size_t)SAMPLE_RATE * note->ms / 1000;
         if (note->freq <= 0.0f) { /* 静默间隔只推进时间 */
             at += step;
@@ -116,8 +137,9 @@ static size_t render(const note_t *seq, int16_t *out, size_t cap)
             continue;
         }
 
-        /* 尾音比音符本身长——重叠出来的就是"余韵" */
-        const size_t tail = step + (size_t)SAMPLE_RATE * 260 / 1000;
+        /* 尾音比音符本身长——重叠出来的就是"余韵"。
+         * 和弦音 step=0，靠这里的固定余量才能响满。 */
+        const size_t tail = step + (size_t)SAMPLE_RATE * 430 / 1000;
         const float w = 2.0f * (float)M_PI * note->freq / (float)SAMPLE_RATE;
         /* 起振 6ms：再短会咔哒，再长会发软 */
         const size_t attack = (size_t)SAMPLE_RATE * 6 / 1000;
@@ -131,11 +153,31 @@ static size_t render(const note_t *seq, int16_t *out, size_t cap)
 
             const float ph = w * (float)i;
             const float v = sinf(ph) + 0.20f * sinf(ph * 2.0f);
-            const int32_t sample = (int32_t)out[idx] + (int32_t)(v * env * 7200.0f);
+            /* 渲染阶段**刻意留足余量**（5000 够五个音同时响不削顶），
+             * 响度交给下面的归一化统一处理。 */
+            const int32_t sample = (int32_t)out[idx] + (int32_t)(v * env * 5000.0f);
             out[idx] = (int16_t)(sample > 32000 ? 32000 : (sample < -32000 ? -32000 : sample));
             if (idx + 1 > n) n = idx + 1;
         }
         at += step;
+    }
+
+    /*
+     * 归一化到接近满刻度。
+     *
+     * **不要靠调那个幅度常数去凑响度。** 音符一多、和弦一叠，
+     * 峰值就翻倍，之前调好的常数立刻削顶——失真听起来是"破音"，
+     * 比声音小难受得多。渲染时留余量、最后统一拉到目标峰值，
+     * 每段提示音的响度才既一致又拉满。
+     */
+    int32_t peak = 0;
+    for (size_t i = 0; i < n; i++) {
+        const int32_t a = out[i] < 0 ? -(int32_t)out[i] : (int32_t)out[i];
+        if (a > peak) peak = a;
+    }
+    if (peak > 0) {
+        const float g = 26000.0f / (float)peak;
+        for (size_t i = 0; i < n; i++) out[i] = (int16_t)((float)out[i] * g);
     }
     return n;
 }
@@ -232,7 +274,10 @@ esp_err_t audio_init(void)
     ESP_RETURN_ON_ERROR(esp_codec_dev_open(s_dev, &fs), TAG, "打开编解码器失败");
     esp_codec_dev_set_out_vol(s_dev, OUT_VOLUME);
 
-    s_buf = heap_caps_malloc(MAX_SAMPLES * sizeof(int16_t), MALLOC_CAP_DEFAULT);
+    /* 110 KB 必须走 PSRAM——内部 RAM 总共才 300 KB 上下，
+     * 拿去放一段提示音会把渲染的离屏缓冲挤掉。 */
+    s_buf = heap_caps_malloc(MAX_SAMPLES * sizeof(int16_t), MALLOC_CAP_SPIRAM);
+    if (s_buf == NULL) s_buf = heap_caps_malloc(MAX_SAMPLES * sizeof(int16_t), MALLOC_CAP_DEFAULT);
     if (s_buf == NULL) return ESP_ERR_NO_MEM;
 
     s_queue = xQueueCreate(2, sizeof(sound_t));

@@ -193,12 +193,12 @@ static void draw_limit_ex(uint16_t *fb, const text_canvas_t *tc, int y, const ch
      * 一个不确定的数字摆在那里，比一个诚实的 "--" 更容易被当真。
      */
     if (right != NULL) {
-        text_draw(tc, BAR_RIGHT_EDGE - text_width(right, TEXT_SCALE), y + BAR_TEXT_DY, right,
+        text_draw(tc, BAR_RIGHT_CX - text_width(right, TEXT_SCALE) / 2, y + BAR_TEXT_DY, right,
                   TEXT_SCALE, COL_RESET);
     } else {
         format_countdown(buf, sizeof(buf), resets_at, now_unix);
         const char *txt = buf[0] != '\0' ? buf : "--";
-        text_draw(tc, BAR_RIGHT_EDGE - text_width(txt, TEXT_SCALE), y + BAR_TEXT_DY, txt,
+        text_draw(tc, BAR_RIGHT_CX - text_width(txt, TEXT_SCALE) / 2, y + BAR_TEXT_DY, txt,
                   TEXT_SCALE, COL_RESET);
     }
 }

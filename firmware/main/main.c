@@ -70,8 +70,10 @@ void app_main(void)
     ui_clear_all(fb_main, COL_BG);
 
     /* scratch 按精灵包围盒的最大可能尺寸一次分配，稳态零 malloc */
-    s_scratch_w = (int)((CLAWD_UNIT_W + 4) * SPRITE_SCALE) + 8;
-    s_scratch_h = (int)((10 + 4) * SPRITE_SCALE) + 8;
+    /* +17 = clawd_bounds 里 8.5 的两倍余量。DJ 态的灯要铺满屏宽，
+     * 缓冲不跟着放大的话，box.w 会被下面的 clamp 砍回去，灯就又被切了。 */
+    s_scratch_w = (int)((CLAWD_UNIT_W + 17) * SPRITE_SCALE) + 8;
+    s_scratch_h = (int)((10 + 17) * SPRITE_SCALE) + 8;
     s_page = heap_caps_malloc((size_t)BSP_LCD_H_RES * BSP_LCD_V_RES * sizeof(uint16_t),
                               MALLOC_CAP_SPIRAM);
     ESP_ERROR_CHECK(s_page == NULL ? ESP_ERR_NO_MEM : ESP_OK);

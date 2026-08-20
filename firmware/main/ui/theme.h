@@ -75,6 +75,10 @@
 /* 最右一列**右对齐到这里**。左对齐的话内容一长就顶出屏幕
  * （"roomy" 五个字母就溢出了），右对齐则长短都落在同一条竖线上。 */
 #define BAR_RIGHT_EDGE 472
+/* 最右一列（重置倒计时 / context 评价）**居中**对齐。
+ * 右对齐时这列的宽度随内容变（"6d" 和 "2h45m" 差一倍），
+ * 左边缘就跟着跳；居中让长短不一的内容仍然稳在同一根轴上。 */
+#define BAR_RIGHT_CX 442
 #define BAR_Y0 348
 #define BAR_DY 42
 #define BAR_ROWS 3

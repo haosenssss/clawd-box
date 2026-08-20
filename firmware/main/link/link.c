@@ -274,7 +274,7 @@ esp_err_t link_start(model_t *model)
      * 不接收的话插这个口就是"有日志、无数据"，很难自查。
      * 装不上不算致命——CH343P 那条路依然可用。
      */
-    const usb_serial_jtag_driver_config_t usb_cfg = {
+    usb_serial_jtag_driver_config_t usb_cfg = {
         .tx_buffer_size = 256,
         .rx_buffer_size = 2048,
     };

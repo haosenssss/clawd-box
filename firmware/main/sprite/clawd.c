@@ -243,12 +243,26 @@ static void fill_quad(const clawd_canvas_t *c, const pt_t q[4], uint16_t color)
             if (hi <= lo) continue;
             any = true;
 
-            /* 横向精确覆盖率：两端按分数计，中间整格 */
-            const int ilo = (int)floorf(lo), ihi = (int)ceilf(hi);
-            for (int x = ilo; x < ihi && x < x1; x++) {
-                if (x < x0) continue;
-                s_cov[x - x0] += span_cov(lo, hi, x) * share;
-            }
+            /*
+             * 横向精确覆盖率：**只有两端要算，中间整格恒等于 1。**
+             *
+             * 原来对区间里每个像素都调一次 span_cov，而且每行要调三遍
+             * （三条子扫描线）。一个 164 像素宽的躯干就是每行 492 次函数调用，
+             * 其中 480 多次的答案都是 1。拆成"左边缘 / 中间 / 右边缘"三段之后，
+             * 中间那段退化成一个加法——这是通用路径最大的一块浪费。
+             */
+            int xa = (int)floorf(lo), xb = (int)ceilf(hi);
+            if (xa < x0) xa = x0;
+            if (xb > x1) xb = x1;
+            int m0 = (int)ceilf(lo);
+            int m1 = (int)floorf(hi);
+            if (m0 < xa) m0 = xa;
+            if (m0 > xb) m0 = xb;
+            if (m1 < m0) m1 = m0;
+            if (m1 > xb) m1 = xb;
+            for (int x = xa; x < m0; x++) s_cov[x - x0] += span_cov(lo, hi, x) * share;
+            for (int x = m0; x < m1; x++) s_cov[x - x0] += share;
+            for (int x = m1; x < xb; x++) s_cov[x - x0] += span_cov(lo, hi, x) * share;
         }
         if (!any) continue;
 
@@ -256,7 +270,15 @@ static void fill_quad(const clawd_canvas_t *c, const pt_t q[4], uint16_t color)
         for (int x = x0; x < x1; x++) {
             const float a = s_cov[x - x0];
             if (a <= 0.004f) continue;
-            row[x] = blend565(row[x], color, a > 1.0f ? 1.0f : a);
+            /*
+             * **完全覆盖的内部像素直接写，不走混色。**
+             * 一个图形里绝大多数像素都是满覆盖的，只有边缘那一圈需要混色；
+             * 对每个像素都做一次 blend565（拆通道 → 乘 → 拼回去）纯属浪费。
+             * 躯干带一点点旋转就会掉进这条通用路径，它一个人就占三成帧时间——
+             * 加这一行之后，旋转图形的代价和轴对齐图形基本拉平了。
+             */
+            if (a > 0.996f) { row[x] = color; continue; }
+            row[x] = blend565(row[x], color, a);
         }
     }
 }
@@ -276,6 +298,10 @@ typedef struct {
     float arm_r_dy;    /* 举起时的额外抬升 */
     /* 腿部颤抖 */
     float leg_rot[4];
+    /* 节拍驱动量：敲击强度、捂耳压下的量。**必须由同一个 beat 算出来**，
+     * 道具才能和动作对上——各自单独计时就会各闪各的。 */
+    float tap;
+    float ear_press;
     /* 眼睛纵向压缩，1=睁开 0=闭合 */
     float eye_scale_y;
     float eye_dx;
@@ -361,6 +387,36 @@ static void put_unit_circle(const clawd_canvas_t *canvas, const view_t *v, float
     }
 }
 
+/** 抗锯齿椭圆。台面上的唱片是斜着看的圆——画成正圆就成了立着的轮子。 */
+static void put_unit_ellipse(const clawd_canvas_t *canvas, const view_t *v, float cx,
+                             float cy, float rx, float ry, float bdy, uint16_t color)
+{
+    const pt_t c = to_px(v, cx, cy + bdy);
+    const float px = rx * v->scale, py = ry * v->scale;
+    if (px <= 0.3f || py <= 0.3f) return;
+    int y0 = (int)floorf(c.y - py), y1 = (int)ceilf(c.y + py);
+    int x0 = (int)floorf(c.x - px), x1 = (int)ceilf(c.x + px);
+    if (y0 < 0) y0 = 0;
+    if (x0 < 0) x0 = 0;
+    if (y1 > canvas->height) y1 = canvas->height;
+    if (x1 > canvas->width) x1 = canvas->width;
+    /* 用归一化距离的梯度做边缘过渡，等价于圆的"半径差"，但对扁椭圆同样成立 */
+    for (int y = y0; y < y1; y++) {
+        uint16_t *row = canvas->pixels + (size_t)y * canvas->width;
+        for (int x = x0; x < x1; x++) {
+            const float dx = ((float)x + 0.5f - c.x) / px;
+            const float dy = ((float)y + 0.5f - c.y) / py;
+            const float d = sqrtf(dx * dx + dy * dy);
+            if (d >= 1.3f) continue;
+            /* 把归一化梯度换算回像素，边缘一像素内线性过渡 */
+            const float grad = (px < py ? px : py);
+            const float a = (1.0f - d) * grad + 0.5f;
+            if (a <= 0.0f) continue;
+            row[x] = blend565(row[x], color, a > 1.0f ? 1.0f : a);
+        }
+    }
+}
+
 static void put_unit_rect(const clawd_canvas_t *canvas, const view_t *v, float x, float y,
                           float w, float h, float bdy, uint16_t color)
 {
@@ -379,119 +435,438 @@ static void put_unit_quad(const clawd_canvas_t *canvas, const view_t *v, const f
     fill_quad(canvas, q, color);
 }
 
-/* --- 干活：一张有厚度的小键盘 + 与手臂同相的按键 --- */
+/* ------------------------------------------------------------------ *
+ * 干活：打碟的 DJ
+ *
+ * **所有东西挂在同一个节拍上**——点头、搓碟、扣耳麦、灯光脉冲、
+ * 唱片被搓时的顿挫，全部由同一个 beat 驱动。此前每个动作各有各的周期，
+ * 看起来就是几个零件各抖各的；"动作假"的根子在这儿，不在曲线精度。
+ * ------------------------------------------------------------------ */
 
-/* 铝合金的三档明暗。金属感全靠这三条带子的排布，不靠渐变——
- * 这个尺度上一像素一档就够读出"是块金属板"。 */
-/*
- * **暗色合金，不是白色。** 第一版用了 0xC6 那一档的亮灰，
- * 在纯黑背景上就是一大块惨白，比角色本身还抢眼，看着像暖气片。
- * 深空灰才不会把主角压下去。
- */
-#define AL_HI clawd_rgb565(0xA6, 0xAE, 0xB6)
-#define AL_MID clawd_rgb565(0x78, 0x81, 0x89)
-#define AL_LO clawd_rgb565(0x4E, 0x56, 0x5D)
-#define AL_EDGE clawd_rgb565(0x24, 0x29, 0x2E)
-/* 屏幕漏出来的光。偏冷偏亮，和精灵的暖橙形成对比，画面才有层次。 */
-#define SCREEN_GLOW clawd_rgb565(0xD6, 0xE6, 0xF6)
-#define SCREEN_GLOW_DIM clawd_rgb565(0x6E, 0x86, 0xA0)
+#define BEAT_MS 520
 
 /*
- * **小**。第一版横跨 12 个单位、高 3 个单位，把腿和大半个身子全挡住——
- * 那不是"面前放着一台电脑"，那是"被一块板子挡住"。
- * 缩到 5.5 个单位宽、放在正中偏下，两侧的腿露出来，
- * 观众才读得出"角色坐在电脑后面"这个空间关系。
+ * 耳麦。上一版只有"一条弧 + 两个圆片"，缺了真正决定辨识度的那件东西：
+ * **叉臂**——从头梁伸下来夹住耳罩的那两根короткие短杆。没有它，
+ * 罩子就是贴在脸侧的两个圆，怎么调都读不出"戴在头上"。
+ *
+ * 另外 DJ 耳麦是大罩：竖着比横着长，而且厚。做成小圆片就是通勤耳机。
  */
-/* 桌面：近边（下）宽、远边（上）窄——朝远处收进去 */
-#define MAC_DECK_NEAR_Y 13.55f
-#define MAC_DECK_FAR_Y 12.55f
-#define MAC_DECK_NEAR_X0 3.30f
-#define MAC_DECK_NEAR_X1 11.20f
-#define MAC_DECK_FAR_X0 4.55f
-#define MAC_DECK_FAR_X1 10.35f
+#define HP_MID clawd_rgb565(0x5A, 0x62, 0x6B)
+#define HP_DARK clawd_rgb565(0x24, 0x28, 0x2D)
+#define HP_PAD clawd_rgb565(0x33, 0x38, 0x3E)
+#define HP_HI clawd_rgb565(0xA2, 0xAD, 0xB8)
 
-/* 屏幕：立在远边上。上沿更宽（朝观众倒）且整体右偏（四分之三视角） */
-#define MAC_LID_BOT_Y 12.55f
-#define MAC_LID_TOP_Y 10.70f
-#define MAC_LID_BOT_X0 4.55f
-#define MAC_LID_BOT_X1 10.35f
-#define MAC_LID_TOP_X0 5.35f
-#define MAC_LID_TOP_X1 10.75f
+/* 唱机 */
+#define DECK_TOP clawd_rgb565(0x2B, 0x30, 0x36)
+#define DECK_EDGE clawd_rgb565(0x14, 0x16, 0x19)
+#define VINYL clawd_rgb565(0x15, 0x17, 0x1A)
+#define VINYL_GROOVE clawd_rgb565(0x33, 0x39, 0x40)
+#define VINYL_MARK clawd_rgb565(0xEC, 0xF0, 0xF4)
 
-/**
- * 笔记本电脑：一个**斜着放**的平面 L。
- *
- * 三处此前做错的地方：
- *
- * 1. **机身要往屏幕里收，不是往外伸。** 桌面是朝远处铺开的，
- *    所以近边（下沿）宽、远边（上沿）窄，屏幕立在那条远边上。
- *    做成一根等宽的横条就成了"贴在画面上的一块板"，没有纵深。
- *
- * 2. **不能摆正。** 正对观众时它是一堵墙，把整张脸糊住。
- *    上沿相对下沿往右偏一点，变成四分之三视角，
- *    既让出左边的脸，又立刻有了"摆在桌上"的随意感。
- *
- * 3. **屏幕上窄下宽。** 深度顺序是：观众 → 屏幕背面 → 转轴 → 键盘面 → 它的手 → 它。
- *    屏幕是朝角色打开的，也就是朝远处倒，那么上沿比下沿远，透视上就该更窄。
- *    我先前做成上宽，等于让屏幕朝观众倒——那样它就背对着自己的使用者了。
- *
- * 4. **屏幕必须矮。** 一台笔记本的屏幕高度大约等于键盘面的进深，
- *    再高就成了台式显示器。而且眼睛在 8..10，上沿压到 10.7 以下脸才完全露出来。
- */
-static void props_macbook(const clawd_canvas_t *canvas, const view_t *v, float bdy,
-                          float arm_l_rot, float arm_r_rot)
+/* 夜店灯：三种冷暖对冲的颜色轮着来，才有"打灯"的感觉；
+ * 一色到底只会像蒙了张色纸。 */
+#define LIGHT_A clawd_rgb565(0xFF, 0x3F, 0xA4)
+#define LIGHT_B clawd_rgb565(0x38, 0xE8, 0xFF)
+#define LIGHT_C clawd_rgb565(0x9B, 0x5D, 0xE5)
+#define LIGHT_D clawd_rgb565(0xFF, 0xB0, 0x20)
+
+/** 取同色系的暗一档。手臂摆到身前时与躯干同色会整条消失——
+ *  官方那套图形手臂本来就甩在体侧，不存在这个问题；一旦让手去够东西，
+ *  就必须有明暗把前后分开。压得很轻（0.86），远看仍是一整块。 */
+static uint16_t shade565(uint16_t c, float k)
 {
-    (void)arm_l_rot;
-    (void)arm_r_rot;
-
-    /*
-     * **只画一个斜的外壳面。**
-     * 键盘面是朝着角色的，也就是朝远处铺——从观众这一侧看，
-     * 它整个藏在屏幕背后，一点都露不出来。先前还画了一块大平板摆在下面，
-     * 那等于把一张本该看不见的桌面硬翻到了正面，怎么调都别扭。
-     */
-    put_unit_quad(canvas, v,
-                  (const float[]){MAC_LID_TOP_X0, MAC_LID_TOP_X1, MAC_LID_BOT_X1,
-                                  MAC_LID_BOT_X0},
-                  (const float[]){MAC_LID_TOP_Y, MAC_LID_TOP_Y, MAC_LID_BOT_Y, MAC_LID_BOT_Y},
-                  bdy, AL_MID);
-
-    /* 底沿一条暗边 = 机身的厚度，也是唯一露得出来的一点点键盘面 */
-    put_unit_quad(canvas, v,
-                  (const float[]){MAC_LID_BOT_X0, MAC_LID_BOT_X1, MAC_LID_BOT_X1,
-                                  MAC_LID_BOT_X0},
-                  (const float[]){MAC_LID_BOT_Y, MAC_LID_BOT_Y, MAC_LID_BOT_Y + 0.26f,
-                                  MAC_LID_BOT_Y + 0.26f},
-                  bdy, AL_EDGE);
-
-    /* 顶边一条亮线：屏幕边框的高光。不画发光——纯黑背景上那道光
-     * 只会变成一条突兀的白杠，反而把这台小机器的形压散了。 */
-    put_unit_quad(canvas, v,
-                  (const float[]){MAC_LID_TOP_X0, MAC_LID_TOP_X1, MAC_LID_TOP_X1 - 0.05f,
-                                  MAC_LID_TOP_X0 + 0.05f},
-                  (const float[]){MAC_LID_TOP_Y, MAC_LID_TOP_Y, MAC_LID_TOP_Y + 0.18f,
-                                  MAC_LID_TOP_Y + 0.18f},
-                  bdy, AL_HI);
-
+    const int r = (int)(((c >> 11) & 0x1F) * k);
+    const int g = (int)(((c >> 5) & 0x3F) * k);
+    const int b = (int)((c & 0x1F) * k);
+    return (uint16_t)((r << 11) | (g << 5) | b);
 }
 
-/* --- 干活：思绪从头顶飘出去 --- */
-#define BIT_COUNT 4
-static const float BIT_X[BIT_COUNT] = {-1.4f, 15.6f, -0.9f, 15.1f};
-static const uint32_t BIT_DELAY[BIT_COUNT] = {0, 500, 1000, 1500};
-#define BIT_PERIOD 2000
-
-static void props_working(const clawd_canvas_t *canvas, const view_t *v, uint32_t t, float bdy)
+/** 沿圆弧铺一串小四边形。头梁这种"细弯条"用它——
+ *  拿几个矩形硬拼，弯折处会露出台阶。相邻两段共边，所以不会有缝。 */
+static void put_arc(const clawd_canvas_t *canvas, const view_t *v, float cx, float cy,
+                    float r, float a0, float a1, float thick, float bdy, uint16_t color)
 {
-    for (int i = 0; i < BIT_COUNT; i++) {
-        const uint32_t ph = (t + BIT_DELAY[i]) % BIT_PERIOD;
-        const float f = (float)ph / (float)BIT_PERIOD;
-        float sz = 0.8f;
-        if (f < 0.2f) sz *= f / 0.2f;
-        else if (f > 0.75f) sz *= (1.0f - f) / 0.25f;
-        if (sz < 0.2f) continue;
-        const float y = 9.0f + (4.0f - 9.0f) * f;
-        put_unit_rect(canvas, v, BIT_X[i] - sz * 0.5f, y - sz * 0.5f, sz, sz, bdy, BIT_COL);
+    const int seg = 14;
+    const float half = thick * 0.5f;
+    /* 相邻两段**故意重叠一点点**。严丝合缝地拼时，两条抗锯齿边各自只覆盖
+     * 半个像素，加起来仍然不满——沿着弧就会出现一串缺口，
+     * 在高光那种细条上尤其明显，看着像虚线。 */
+    const float ov = (a1 - a0) * 0.02f;
+    for (int i = 0; i < seg; i++) {
+        const float t0 = a0 + (a1 - a0) * (float)i / (float)seg - (i ? ov : 0.0f);
+        const float t1 = a0 + (a1 - a0) * (float)(i + 1) / (float)seg;
+        const float xs[4] = {cx + cosf(t0) * (r - half), cx + cosf(t1) * (r - half),
+                             cx + cosf(t1) * (r + half), cx + cosf(t0) * (r + half)};
+        const float ys[4] = {cy + sinf(t0) * (r - half), cy + sinf(t1) * (r - half),
+                             cy + sinf(t1) * (r + half), cy + sinf(t0) * (r + half)};
+        put_unit_quad(canvas, v, xs, ys, bdy, color);
+    }
+}
+
+/*
+ * 头梁那条弧是解出来的：要求同时过左罩顶 (1.95, 6.50)、右罩顶 (13.05, 6.50)
+ * 和头顶 (7.5, 4.50)，得到圆心 (7.5, 13.20)、半径 8.70。
+ */
+#define HP_CUP_L_X 1.95f
+#define HP_CUP_R_X 13.05f
+#define HP_CUP_Y 8.20f
+#define HP_CUP_RX 1.52f
+#define HP_CUP_RY 1.88f
+#define HP_ARC_CX 7.50f
+#define HP_ARC_CY 13.20f
+#define HP_ARC_R 8.70f
+
+static void props_headphones(const clawd_canvas_t *canvas, const view_t *v, float bdy,
+                             float press)
+{
+    /* 1) 叉臂先画，等下被耳罩压住上半截——这个遮挡关系正是"夹住"的观感来源 */
+    for (int i = 0; i < 2; i++) {
+        const float cx = i ? HP_CUP_R_X : HP_CUP_L_X;
+        put_unit_rect(canvas, v, cx - 0.30f, 5.95f, 0.60f, 2.40f, bdy, HP_DARK);
+        put_unit_rect(canvas, v, cx - 0.30f, 5.95f, 0.16f, 2.40f, bdy, HP_HI);
+    }
+
+    /* 2) 头梁。厚一点才像 DJ 耳麦，细了就是通勤耳机。 */
+    put_arc(canvas, v, HP_ARC_CX, HP_ARC_CY, HP_ARC_R, 4.021f, 5.404f, 0.62f, bdy, HP_MID);
+    put_arc(canvas, v, HP_ARC_CX, HP_ARC_CY, HP_ARC_R + 0.24f, 4.08f, 5.34f, 0.15f, bdy,
+            HP_HI);
+
+    /* 3) 耳罩：竖椭圆的大罩 + 内圈耳垫。press 是手往里压的量，
+     *    罩子跟着略微被压扁——手压下去而罩子纹丝不动，那只手就只是贴在旁边。 */
+    for (int i = 0; i < 2; i++) {
+        const float cx = i ? HP_CUP_R_X : HP_CUP_L_X;
+        const float sq = (i == 0) ? press * 0.09f : 0.0f;
+        /* 先画一圈亮的，再把主体略偏右下压上去 —— 左上留出一道月牙高光。
+         * 同心圆套同心圆读出来是照相机镜头，有了偏心的高光才是个球面罩子。 */
+        put_unit_ellipse(canvas, v, cx - 0.10f, HP_CUP_Y - 0.12f, HP_CUP_RX - sq + 0.05f,
+                         HP_CUP_RY - sq * 0.5f + 0.05f, bdy, HP_HI);
+        put_unit_ellipse(canvas, v, cx, HP_CUP_Y, HP_CUP_RX - sq, HP_CUP_RY - sq * 0.5f,
+                         bdy, HP_MID);
+        put_unit_ellipse(canvas, v, cx, HP_CUP_Y, HP_CUP_RX * 0.70f, HP_CUP_RY * 0.70f,
+                         bdy, HP_PAD);
+        put_unit_ellipse(canvas, v, cx, HP_CUP_Y, HP_CUP_RX * 0.44f, HP_CUP_RY * 0.44f,
+                         bdy, HP_DARK);
+    }
+}
+
+/*
+ * DJ 台。
+ *
+ * **必须先有台面这个"平面"，碟才躺得住。** 上一版只画了一条细边，
+ * 碟就成了两个立在那儿的轮子——不是椭圆画得不够扁，是眼睛没有参照面，
+ * 于是把椭圆读成了正面看的圆。画出一块朝远处收进去的梯形台面，
+ * 同样的椭圆立刻就"躺"下去了。
+ *
+ * 台子要大。DJ 台本来就是横在人前的一整张控制台，
+ * 做成腰间一条小板子既不像，也撑不起那两张碟。
+ * 台面盖住腿是对的——真实的 DJ 就是只露上半身站在台后。
+ */
+#define DECK_FAR_Y 11.50f
+#define DECK_NEAR_Y 13.90f
+#define DECK_FAR_X0 1.00f
+#define DECK_FAR_X1 14.00f
+#define DECK_NEAR_X0 (-3.50f)
+#define DECK_NEAR_X1 18.50f
+#define DISC_L_X 4.20f
+#define DISC_R_X 11.60f
+#define DISC_Y 12.50f
+/* 半径比 2.5 : 1.15 ≈ 2.2:1，正好等于台面自身的透视压缩比——
+ * 碟和台子的"倾角"必须一致，差一点就会显得碟是斜插在台面上的。 */
+#define DISC_RX 2.50f
+#define DISC_RY 1.15f
+
+/** 一张唱片：碟体 + 一圈纹路 + 标签 + 一个转动的白点。
+ *  那个白点是**唯一能读出"它在转"**的东西——没有它，碟就是个静止的椭圆。 */
+static void draw_disc(const clawd_canvas_t *canvas, const view_t *v, float cx, float phi,
+                      uint16_t label)
+{
+    put_unit_ellipse(canvas, v, cx, DISC_Y, DISC_RX, DISC_RY, 0.0f, VINYL);
+    put_unit_ellipse(canvas, v, cx, DISC_Y, DISC_RX * 0.78f, DISC_RY * 0.78f, 0.0f,
+                     VINYL_GROOVE);
+    put_unit_ellipse(canvas, v, cx, DISC_Y, DISC_RX * 0.68f, DISC_RY * 0.68f, 0.0f, VINYL);
+    put_unit_ellipse(canvas, v, cx, DISC_Y, DISC_RX * 0.30f, DISC_RY * 0.30f, 0.0f, label);
+    put_unit_ellipse(canvas, v, cx + cosf(phi) * DISC_RX * 0.46f,
+                     DISC_Y + sinf(phi) * DISC_RY * 0.46f, 0.17f, 0.09f, 0.0f, VINYL_MARK);
+}
+
+static void props_decks(const clawd_canvas_t *canvas, const view_t *v, uint32_t t,
+                        float scratch, uint16_t label)
+{
+    /* 整段不吃 bdy：台子立在地上，不跟着身体点头。
+     * 让它一起弹的话，"人在动"就变成"人和台子一起在动"，节奏感全丢。 */
+
+    /* 台面：近边宽、远边窄，朝远处收进去。这块梯形就是全部"平面感"的来源。 */
+    put_unit_quad(canvas, v,
+                  (const float[]){DECK_FAR_X0, DECK_FAR_X1, DECK_NEAR_X1, DECK_NEAR_X0},
+                  (const float[]){DECK_FAR_Y, DECK_FAR_Y, DECK_NEAR_Y, DECK_NEAR_Y}, 0.0f,
+                  DECK_TOP);
+    /* 远沿一条亮线：台面的后缘。没有它，台面和背后的黑融成一片。 */
+    put_unit_quad(canvas, v,
+                  (const float[]){DECK_FAR_X0, DECK_FAR_X1, DECK_FAR_X1 - 0.10f,
+                                  DECK_FAR_X0 + 0.10f},
+                  (const float[]){DECK_FAR_Y, DECK_FAR_Y, DECK_FAR_Y + 0.16f,
+                                  DECK_FAR_Y + 0.16f},
+                  0.0f, HP_MID);
+    /* 台子正面 */
+    put_unit_quad(canvas, v,
+                  (const float[]){DECK_NEAR_X0, DECK_NEAR_X1, DECK_NEAR_X1, DECK_NEAR_X0},
+                  (const float[]){DECK_NEAR_Y, DECK_NEAR_Y, DECK_NEAR_Y + 1.40f,
+                                  DECK_NEAR_Y + 1.40f},
+                  0.0f, DECK_EDGE);
+
+    /* 两张碟 */
+    const float base = (float)t * 6.2832f / 900.0f;
+    draw_disc(canvas, v, DISC_L_X, base, label);
+    /* 右碟正被手搓，转角被拽回去——**顿挫来自手，不是碟自己在抖** */
+    draw_disc(canvas, v, DISC_R_X, base - scratch * 3.4f, label);
+
+    /* 中间的调音台。**要满。** 空荡荡的台面读出来是块塑料板，
+     * 真正让它像器材的是密密麻麻的旋钮、推子和跑灯。 */
+    put_unit_quad(canvas, v, (const float[]){6.05f, 9.55f, 10.05f, 5.55f},
+                  (const float[]){11.75f, 11.75f, 13.75f, 13.75f}, 0.0f, DECK_EDGE);
+
+    /* 两排 EQ 旋钮，各带一根指示线；角度各不相同才像是被人调过的 */
+    for (int r = 0; r < 2; r++) {
+        for (int c = 0; c < 4; c++) {
+            const float kx = 6.35f + (float)c * 0.78f + (float)r * 0.10f;
+            const float ky = 12.05f + (float)r * 0.52f;
+            put_unit_ellipse(canvas, v, kx, ky, 0.27f, 0.15f, 0.0f, DECK_TOP);
+            put_unit_ellipse(canvas, v, kx, ky, 0.17f, 0.09f, 0.0f, DECK_EDGE);
+            const float ka = 2.1f + (float)(r * 4 + c) * 0.62f;
+            put_unit_rect(canvas, v, kx + cosf(ka) * 0.14f, ky + sinf(ka) * 0.08f, 0.09f,
+                          0.07f, 0.0f, VINYL_MARK);
+        }
+    }
+    /* 三根竖推子，中间那根跟着搓碟走 */
+    for (int i = 0; i < 3; i++) {
+        const float fx = 6.55f + (float)i * 0.95f;
+        put_unit_rect(canvas, v, fx, 13.00f, 0.13f, 0.62f, 0.0f, DECK_TOP);
+        const float k = (i == 1) ? (0.30f + scratch * 0.34f) : (0.30f + (float)i * 0.20f);
+        put_unit_rect(canvas, v, fx - 0.14f, 13.00f + k * 0.50f, 0.40f, 0.16f, 0.0f,
+                      HP_MID);
+    }
+    /* 电平灯跟着拍子跑 */
+    const int level = 1 + (int)(scratch * 5.0f);
+    for (int i = 0; i < 6; i++) {
+        const uint16_t col = i < level ? (i > 3 ? LIGHT_A : LIGHT_B) : DECK_TOP;
+        put_unit_rect(canvas, v, 8.15f + (float)i * 0.30f, 13.10f, 0.20f, 0.20f, 0.0f, col);
+    }
+    /* 两侧各一条变速滑轨 + 四个彩色触发键 —— DJ 台的标志性零件 */
+    for (int sd = 0; sd < 2; sd++) {
+        const float bx = sd ? 14.30f : 0.55f;
+        put_unit_rect(canvas, v, bx, 12.30f, 0.16f, 1.05f, 0.0f, DECK_EDGE);
+        put_unit_rect(canvas, v, bx - 0.16f, 12.30f + (sd ? 0.55f : 0.30f), 0.48f, 0.18f,
+                      0.0f, HP_MID);
+        for (int i = 0; i < 4; i++) {
+            const uint16_t col = (i & 1) ? LIGHT_C : LIGHT_D;
+            put_unit_rect(canvas, v, bx - 0.95f + (float)(i % 2) * 0.52f,
+                          12.35f + (float)(i / 2) * 0.52f, 0.40f, 0.36f, 0.0f, col);
+        }
+    }
+}
+
+/* --- 干活：背后的夜店灯 --- */
+
+#define BEAM_COUNT 6
+
+/**
+ * 从人物背后放射出去的光束，整扇缓慢扫动，并**在拍点上一起变亮**。
+ *
+ * 两个要点：
+ * 一、必须半透明。实色的三角形是几片挡在人前的塑料板，不是光。
+ * 二、画在人物**之前**。光从背后打出来，被身体挡住的那部分不该看见——
+ *     这个遮挡关系才是"背光"的全部观感来源。
+ */
+/** 通道相加并饱和。光叠光要变亮——这是光和颜料最根本的区别。 */
+static uint16_t add565(uint16_t d, uint16_t s)
+{
+    int r = ((d >> 11) & 0x1F) + ((s >> 11) & 0x1F);
+    int g = ((d >> 5) & 0x3F) + ((s >> 5) & 0x3F);
+    int b = (d & 0x1F) + (s & 0x1F);
+    if (r > 31) r = 31;
+    if (g > 63) g = 63;
+    if (b > 31) b = 31;
+    return (uint16_t)((r << 11) | (g << 5) | b);
+}
+
+/**
+ * 一束光。
+ *
+ * **逐像素算，不是几块四边形拼的。** 拿 7 段梯形拼出来的渐变，
+ * 每段之间是一道明显的台阶，屏上读出来是几块叠着的碎砖，不是光。
+ *
+ * 两个方向各自柔化：
+ *   横向 —— 按到光轴的**垂距**衰减（不用 atan2，两次乘加就够），越靠边越淡；
+ *   纵向 —— 前半程满亮（这段大半藏在身体后面），后半程平方淡出到 0。
+ *
+ * 淡出的终点取的是"这个方向到画布边还有多远"。精灵画在一个矩形合成框里，
+ * 框上方只剩 5 个单位、左右却有 9.5 个；用统一长度的话，朝上的光会在
+ * 还很亮的时候撞上框边，屏幕上就是一道笔直的刀切痕。
+ */
+static void draw_beam(const clawd_canvas_t *canvas, const view_t *v, float ox, float oy,
+                      float ca, float sa, float half, float reach, uint16_t color,
+                      float base)
+{
+    const pt_t o = to_px(v, ox, oy);
+    const pt_t e0 = to_px(v, ox + (ca - sa * half) * reach, oy + (sa + ca * half) * reach);
+    const pt_t e1 = to_px(v, ox + (ca + sa * half) * reach, oy + (sa - ca * half) * reach);
+
+    float lox = o.x, hix = o.x, loy = o.y, hiy = o.y;
+    const pt_t es[2] = {e0, e1};
+    for (int i = 0; i < 2; i++) {
+        if (es[i].x < lox) lox = es[i].x;
+        if (es[i].x > hix) hix = es[i].x;
+        if (es[i].y < loy) loy = es[i].y;
+        if (es[i].y > hiy) hiy = es[i].y;
+    }
+    int y0 = (int)floorf(loy), y1 = (int)ceilf(hiy);
+    int x0 = (int)floorf(lox), x1 = (int)ceilf(hix);
+    if (y0 < 0) y0 = 0;
+    if (x0 < 0) x0 = 0;
+    if (y1 > canvas->height) y1 = canvas->height;
+    if (x1 > canvas->width) x1 = canvas->width;
+
+    const float inv = 1.0f / v->scale;
+    const float fade0 = reach * 0.45f;
+    const float inv_fade = 1.0f / (reach - fade0);
+    const pt_t tri[3] = {o, e0, e1};
+
+    /*
+     * **按 2x2 的块算，不是逐像素。**
+     * 灯是一片柔和的渐变，半分辨率下肉眼分不出差别，代价却降到四分之一。
+     * 之前逐像素算，板子上一帧要 137ms（7fps），动画成了幻灯片。
+     */
+    y0 &= ~1;
+    x0 &= ~1;
+    for (int y = y0; y < y1; y += 2) {
+        /*
+         * 逐行先求出三角形真正覆盖的区间，再在区间里算。
+         * 按整个外接矩形扫的话，斜着的光束有一多半像素是算完再扔掉的。
+         */
+        const float sy = (float)y + 1.0f;
+        float lo = 1e9f, hi = -1e9f;
+        for (int e = 0; e < 3; e++) {
+            const pt_t *p = &tri[e];
+            const pt_t *n = &tri[(e + 1) % 3];
+            if ((p->y <= sy) == (n->y <= sy)) continue;
+            const float dy = n->y - p->y;
+            if (dy == 0.0f) continue;
+            const float xx = p->x + (n->x - p->x) * (sy - p->y) / dy;
+            if (xx < lo) lo = xx;
+            if (xx > hi) hi = xx;
+        }
+        if (hi <= lo) continue;
+        int xa = (int)floorf(lo) & ~1, xb = (int)ceilf(hi);
+        if (xa < x0) xa = x0;
+        if (xb > x1) xb = x1;
+        if (xb <= xa) continue;
+
+        uint16_t *r0 = canvas->pixels + (size_t)y * canvas->width;
+        uint16_t *r1 = (y + 1 < canvas->height) ? r0 + canvas->width : NULL;
+        const float uy = (sy - o.y) * inv;
+        for (int x = xa; x < xb; x += 2) {
+            const float ux = ((float)x + 1.0f - o.x) * inv;
+            /* 沿轴距离与到轴垂距。两次乘加，比每像素一次 atan2 便宜一个数量级。 */
+            const float along = ux * ca + uy * sa;
+            if (along <= 0.0f || along >= reach) continue;
+            float perp = ux * (-sa) + uy * ca;
+            if (perp < 0.0f) perp = -perp;
+            /* 光锥随距离张开；+0.35 让根部不至于收成一个针尖 */
+            const float w = along * half + 0.35f;
+            if (perp >= w) continue;
+            const float lat = 1.0f - (perp / w) * (perp / w);
+            float rad = 1.0f;
+            if (along > fade0) {
+                rad = (reach - along) * inv_fade;
+                rad = rad * rad;
+            }
+            const float aa = base * lat * rad;
+            if (aa < 0.012f) continue;
+            const uint16_t c = shade565(color, aa);
+            r0[x] = add565(r0[x], c);
+            if (x + 1 < x1) r0[x + 1] = add565(r0[x + 1], c);
+            if (r1 != NULL) {
+                r1[x] = add565(r1[x], c);
+                if (x + 1 < x1) r1[x + 1] = add565(r1[x + 1], c);
+            }
+        }
+    }
+}
+
+static void props_lights(const clawd_canvas_t *canvas, const view_t *v, uint32_t t,
+                         float pulse)
+{
+    /* 不能是 static：clawd_rgb565 是内联函数，不是编译期常量 */
+    const uint16_t COL[BEAM_COUNT] = {LIGHT_A, LIGHT_B, LIGHT_C,
+                                      LIGHT_D, LIGHT_A, LIGHT_B};
+    /* **整扇灯连续转圈**，不是来回扫。来回扫会在两端停顿再折返，
+     * 读出来是在摇头；灯架转圈才是夜店里那种一直往一个方向扫过去的感觉。 */
+    const float spin = (float)t * 6.2832f / 7000.0f;
+    const float ox = 7.5f, oy = 9.2f;
+    const float half = 0.20f;
+    /* 压到饱和是**故意的**：颜色打满之后光心会发白，边缘留住原色，
+     * 这正是真灯的样子，也是"艳"的来源。留在半亮档只会灰扑扑的。 */
+    const float base = 1.15f + pulse * 0.55f;
+
+    /* 画布边界换算回单位坐标，用来求每束光在自己方向上还能走多远 */
+    const float bx0 = (0.0f - v->ox) / v->scale;
+    const float bx1 = ((float)canvas->width - v->ox) / v->scale;
+    const float by0 = (0.0f - v->oy) / v->scale;
+    const float by1 = ((float)canvas->height - v->oy) / v->scale;
+
+    for (int i = 0; i < BEAM_COUNT; i++) {
+        /* 扇形均匀铺开，再整体扫动。相邻两束交替往反方向偏，
+         * 免得整扇像一块硬纸板在转。 */
+        const float ang = 6.2832f * (float)i / (float)BEAM_COUNT + spin;
+        const float ca = cosf(ang), sa = sinf(ang);
+        float reach = 40.0f;
+        if (ca > 0.001f) { const float d = (bx1 - ox) / ca; if (d < reach) reach = d; }
+        if (ca < -0.001f) { const float d = (bx0 - ox) / ca; if (d < reach) reach = d; }
+        if (sa > 0.001f) { const float d = (by1 - oy) / sa; if (d < reach) reach = d; }
+        if (sa < -0.001f) { const float d = (by0 - oy) / sa; if (d < reach) reach = d; }
+        if (reach < 1.5f) continue;
+        draw_beam(canvas, v, ox, oy, ca, sa, half, reach, COL[i], base);
+    }
+}
+
+/* --- 干活：前景的 bling --- */
+
+#define BLING_COUNT 9
+static const float BLING_X[BLING_COUNT] = {-1.2f, 16.3f, 2.4f, 12.8f, -0.4f,
+                                           15.4f, 7.6f,  4.6f, 10.4f};
+static const float BLING_Y[BLING_COUNT] = {5.4f, 6.1f, 4.2f, 4.6f, 9.8f,
+                                           10.6f, 3.6f, 14.6f, 14.9f};
+static const uint32_t BLING_DELAY[BLING_COUNT] = {0,   170, 340, 510, 680,
+                                                  850, 260, 430, 600};
+
+/** 四角星。**不是圆点**——圆点在这个尺度上只会读成坏点，
+ *  两条交叉的尖刺才有"闪"的意思。 */
+static void draw_bling(const clawd_canvas_t *canvas, const view_t *v, float x, float y,
+                       float s, uint16_t col)
+{
+    const float lo = 0.11f * s, hi = 0.62f * s;
+    put_unit_quad(canvas, v, (const float[]){x - lo, x, x + lo, x},
+                  (const float[]){y, y - hi, y, y + hi}, 0.0f, col);
+    put_unit_quad(canvas, v, (const float[]){x - hi, x, x + hi, x},
+                  (const float[]){y, y - lo, y, y + lo}, 0.0f, col);
+}
+
+#define BLING_PERIOD 1040
+
+static void props_working(const clawd_canvas_t *canvas, const view_t *v, uint32_t t,
+                          float bdy)
+{
+    (void)bdy;
+    for (int i = 0; i < BLING_COUNT; i++) {
+        const uint32_t ph = (t + BLING_DELAY[i]) % BLING_PERIOD;
+        const float f = (float)ph / (float)BLING_PERIOD;
+        if (f > 0.42f) continue; /* 大部分时间是灭的，才叫"闪" */
+        const float g = f / 0.42f;
+        const float s = sinf(g * 3.1416f); /* 起落对称的一次明灭 */
+        if (s < 0.10f) continue;
+        const uint16_t col = (i % 3 == 0) ? LIGHT_B : ((i % 3 == 1) ? VINYL_MARK : LIGHT_A);
+        draw_bling(canvas, v, BLING_X[i], BLING_Y[i], s * 1.15f, col);
     }
 }
 
@@ -677,6 +1052,8 @@ static void props_sleeping(const clawd_canvas_t *canvas, const view_t *v, uint32
 
 static void pose_reset(pose_t *p)
 {
+    p->tap = 0.0f;
+    p->ear_press = 0.0f;
     memset(p, 0, sizeof(*p));
     p->body_sx = p->body_sy = 1.0f;
     p->eye_scale_y = 1.0f;
@@ -728,53 +1105,56 @@ static void pose_idle(pose_t *p, uint32_t t)
  */
 static void pose_working(pose_t *p, uint32_t t)
 {
-    static const key_t BOUNCE[] = {{0.0f, 0.0f}, {0.5f, 0.8f}, {1.0f, 0.0f}};
-    p->body_dy = ease_keys(BOUNCE, 3, phase_of(t, 700)) * 0.06f;
+    /* 一个节拍统领全部：下面每条曲线都用同一个 beat 或它的整数倍。 */
+    const float beat = phase_of(t, BEAT_MS);
 
-    static const key_t TYPE[] = {
-        {0.00f, -5.0f}, {0.25f, -38.0f}, {0.50f, -10.0f}, {0.75f, -30.0f}, {1.00f, -5.0f}};
-    /*
-     * **周期不能比帧间隔短太多。** 官方是 120/150ms，那是 60fps 浏览器里的数；
-     * 这块板子 30fps，120ms 一个周期只采到 3~4 帧，动作直接被采样打碎成抖动——
-     * 不是"在打字"，是"在哆嗦"。放慢到 360/300ms，一个周期有 10 帧上下，
-     * 敲击的起落才看得出来。两个周期仍然互质，双手依旧不同步。
-     */
-    p->arm_l_rot = ease_keys(TYPE, 5, phase_of(t, 360)) * (float)M_PI / 180.0f;
-    p->arm_r_rot = -ease_keys(TYPE, 5, phase_of(t, 300)) * (float)M_PI / 180.0f;
+    /* 点头：拍点上**沉下去**再弹回。重音在落点而不是顶点——
+     * 对称的上下起伏是节拍器，不是音乐。 */
+    static const key_t NOD[] = {
+        {0.00f, 0.00f}, {0.16f, 0.26f}, {0.50f, -0.06f}, {1.00f, 0.00f}};
+    p->body_dy = ease_keys(NOD, 4, beat);
 
-    static const key_t SHADOW[] = {{0.0f, 1.02f}, {0.5f, 1.05f}, {1.0f, 1.02f}};
-    p->shadow_sx = ease_keys(SHADOW, 3, phase_of(t, 400));
+    /* 两拍一个来回的侧身。频率是点头的一半，两个叠起来才有"跟着音乐"的
+     * 松弛感；同频的话整个人只是在原地弹。 */
+    static const key_t SWAY[] = {{0.00f, -1.8f}, {0.50f, 1.8f}, {1.00f, -1.8f}};
+    p->body_rot = ease_keys(SWAY, 3, phase_of(t, BEAT_MS * 2)) * (float)M_PI / 180.0f;
 
-    /*
-     * **眼睛是眯着的，而且偶尔抬头扫一眼。**
-     * 官方 eye-code 是条 10 秒的长曲线：大部分时间 scaleY 0.6 并下移 1 单位
-     * （盯着键盘的专注表情），中间穿插几次眨眼，57%~71% 抬起来左右扫两下屏幕。
-     * 少了这个，"干活"就只是身体在抖，脸上没有神——不可爱的关键一处。
-     */
-    const float ep = phase_of(t, 10000);
+    /* 左手扣着耳罩，每两拍往里压一下——听 mix 的那个下意识动作。
+     * 抬手是**正角度**：左臂支点在 (2,10)，负角度是往下甩（那是打字）。 */
+    static const key_t PRESS[] = {
+        {0.00f, 0.00f}, {0.20f, 1.00f}, {0.52f, 0.18f}, {1.00f, 0.00f}};
+    p->ear_press = ease_keys(PRESS, 4, phase_of(t, BEAT_MS * 2));
+    /* 74° 是解出来的：手臂外端要正好压在罩子的下半边（罩心 (1.95,7.95) 半径 1.6）。
+     * 58° 时外端甩到 x=0.09，掉在罩子左边的黑底上，读出来是块浮空的方块。 */
+    p->arm_l_rot = (74.0f + p->ear_press * 7.0f) * (float)M_PI / 180.0f;
+
+    /* 右手搓碟：一拍两下（baby scratch），推出去再拽回来。 */
+    static const key_t SCRATCH[] = {
+        {0.00f, 0.50f}, {0.22f, 1.00f}, {0.50f, 0.35f}, {0.74f, 0.90f}, {1.00f, 0.50f}};
+    p->tap = ease_keys(SCRATCH, 5, beat);
+    /* 104°~126° 是按碟的位置反解的：指尖扫过 x≈11.8~12.5、y≈11.6~12.2，
+     * 正压在右碟 (11.60, 11.72) 的右半边上。手的位置和碟的转角是
+     * **同一个量**驱动的——所以碟的顿挫看起来是被这只手搓出来的，
+     * 而不是碟自己在抖。 */
+    p->arm_r_rot = (104.0f + p->tap * 22.0f) * (float)M_PI / 180.0f;
+
+    /* 眯着眼享受，偶尔眨一下。**不再左右扫视**——没有屏幕可看了，
+     * 留着那段扫视就成了对着空气找东西。 */
+    const float ep = phase_of(t, 7000);
     static const key_t EYE_SY[] = {
-        {0.00f, 0.6f}, {0.14f, 0.6f}, {0.15f, 0.1f}, {0.16f, 0.6f},
-        {0.36f, 0.6f}, {0.37f, 0.1f}, {0.38f, 0.6f},
-        {0.54f, 0.6f}, {0.55f, 0.1f},
-        {0.57f, 1.0f}, {0.69f, 1.0f}, {0.71f, 0.1f}, {0.73f, 0.6f},
-        {0.89f, 0.6f}, {0.90f, 0.1f}, {0.91f, 0.6f}, {1.00f, 0.6f}};
-    static const key_t EYE_DX[] = {
-        {0.00f, 0.0f}, {0.55f, 0.0f}, {0.57f, -1.0f}, {0.62f, 1.5f},
-        {0.64f, -0.5f}, {0.69f, 1.5f}, {0.73f, 0.0f}, {1.00f, 0.0f}};
-    static const key_t EYE_DY[] = {
-        {0.00f, 1.0f}, {0.55f, 1.0f}, {0.57f, -0.5f}, {0.69f, -0.5f},
-        {0.73f, 1.0f}, {1.00f, 1.0f}};
-    p->eye_scale_y = ease_keys(EYE_SY, 17, ep);
-    p->eye_dx = ease_keys(EYE_DX, 8, ep);
-    p->eye_dy = ease_keys(EYE_DY, 6, ep);
+        {0.00f, 0.55f}, {0.20f, 0.55f}, {0.21f, 0.10f}, {0.23f, 0.55f},
+        {0.58f, 0.55f}, {0.59f, 0.10f}, {0.61f, 0.55f}, {1.00f, 0.55f}};
+    p->eye_scale_y = ease_keys(EYE_SY, 8, ep);
+    /* 眼睛跟着拍子一起沉，幅度只有身体的一半——完全同幅会像整张脸在滑动 */
+    p->eye_dy = 0.45f + p->body_dy * 0.5f;
 
-    /* 呼吸照旧，但眨眼已由上面的曲线接管，不再叠加 */
     static const key_t BX[] = {{0.0f, 1.0f}, {0.5f, 1.02f}, {1.0f, 1.0f}};
     static const key_t BY[] = {{0.0f, 1.0f}, {0.5f, 0.98f}, {1.0f, 1.0f}};
     const float bp = phase_of(t, 3200);
     p->body_sx *= ease_keys(BX, 3, bp);
     p->body_sy *= ease_keys(BY, 3, bp);
 }
+
 
 /*
  * 刚完成：教科书式 squash-and-stretch，1s 循环。
@@ -933,9 +1313,11 @@ clawd_rect_t clawd_bounds(const clawd_draw_t *p)
      * 人物只占 y=6..15 这 9 个单位，上面 6 个单位是空的，
      * 按整格算会白清掉将近一半屏幕，帧耗时直接翻倍。
      *
-     * 余量 2 单位覆盖：手臂旋转外甩、DONE 态跳跃、等待态举臂、重力位移。
+     * 余量 8.5 单位：除了手臂外甩和跳跃，主要是给 DJ 态的灯光留地方——
+     * 15 + 8.5×2 = 32 单位 × 14.9 = 477px，正好铺满 480 的屏宽。
+     * 灯要"铺开"就必须先有地方铺，光调亮度是没用的。
      */
-    const float margin = 2.0f;
+    const float margin = 8.5f;
     const float s = p->px_per_unit;
     const float top_unit = 6.0f;   /* 头顶 */
     const float bot_unit = 15.0f;  /* 脚底 = BODY_PIVOT_Y */
@@ -1007,6 +1389,10 @@ void clawd_draw(const clawd_canvas_t *canvas, const clawd_draw_t *p)
     const rect_t *arm_l = pose.body_form == 2 ? &R_SLEEP_ARM_L : &R_ARM_L;
     const rect_t *arm_r = pose.body_form == 2 ? &R_SLEEP_ARM_R : &R_ARM_R;
 
+    /* 夜店灯**画在人物之前**：光从背后打出来，被身体挡住的部分不该看见。
+     * 这个遮挡关系就是"背光"的全部观感来源，顺序反了就变成蒙了张色纸。 */
+    if (p->state == CLAWD_WORKING) props_lights(canvas, &view, p->elapsed_ms, pose.tap);
+
     /* 腿（各自带一点颤抖旋转，支点在腿根） */
     for (int i = 0; i < 4; i++) {
         const rect_t *leg = &legs[i];
@@ -1021,26 +1407,35 @@ void clawd_draw(const clawd_canvas_t *canvas, const clawd_draw_t *p)
     fill_quad(canvas, quad, p->body_color);
 
 
-    /* 笔记本画在**手臂之前**：机身在腰线高度，手放下来搭在上面。
-     * 反过来的话电脑会盖住手，就成了"人躲在电脑后面"而不是"人在用电脑"。 */
+    /*
+     * 合成器和耳机都画在**躯干之后、手臂之前**：
+     * 琴横在身前、罩子扣在头侧，两只手都落在它们上面。
+     * 顺序反了就成了"人躲在琴后面"和"手藏在耳罩里面"。
+     *
+     * 手的横坐标由臂角直接算出来（肩关节 (13,10)、臂长 2），
+     * 亮起的琴键就是这么跟手对上的——不是另起一个计时器去闪。
+     */
     if (p->state == CLAWD_WORKING) {
-        props_macbook(canvas, &view, bdy, pose.arm_l_rot, pose.arm_r_rot);
+        props_decks(canvas, &view, p->elapsed_ms, (pose.tap - 0.5f) * 2.0f, p->body_color);
+        props_headphones(canvas, &view, bdy, pose.ear_press);
     }
 
-    /* 双臂 */
+    /* 双臂。**比躯干暗一档**——摆到身前时同色会整条融进身体，
+     * 于是"手按在琴键上"读成"身上多了一块"。 */
+    const uint16_t arm_col = shade565(p->body_color, 0.86f);
     if (pose.body_form == 2) {
         /* 睡姿的手是摊在地上的，跟着身体一起缩放，不单独旋转 */
         BODY_XFORM(arm_l);
-        fill_quad(canvas, quad, p->body_color);
+        fill_quad(canvas, quad, arm_col);
         BODY_XFORM(arm_r);
-        fill_quad(canvas, quad, p->body_color);
+        fill_quad(canvas, quad, arm_col);
     } else {
         transform_rect(&view, arm_l, ARM_L_PIVOT_X, ARM_L_PIVOT_Y, pose.arm_l_rot, 1.0f,
                        1.0f, bdx, bdy, quad);
-        fill_quad(canvas, quad, p->body_color);
+        fill_quad(canvas, quad, arm_col);
         transform_rect(&view, arm_r, ARM_R_PIVOT_X, ARM_R_PIVOT_Y, pose.arm_r_rot, 1.0f,
                        1.0f, bdx, bdy + pose.arm_r_dy, quad);
-        fill_quad(canvas, quad, p->body_color);
+        fill_quad(canvas, quad, arm_col);
     }
 
     /*
