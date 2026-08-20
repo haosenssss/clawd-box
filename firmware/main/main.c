@@ -207,6 +207,14 @@ void app_main(void)
             } else {
                 admin_page_draw(s_page, &ptc, &s_model, t, now_unix);
             }
+            /*
+             * **等到 VSYNC 再写。**
+             * 这块屏是单缓冲直写：面板一直在从帧缓冲里扫，
+             * 什么时候写就什么时候被看见。渲染完成的时刻和扫描位置毫无关系，
+             * 写到正被扫描的那几行上就是撕裂——随机出现，就是"偶尔频闪"。
+             * 卡在帧起点写，拷贝和扫描同向且比它快，就始终跑在扫描线前面。
+             */
+            bsp_display_wait_swap();
             memcpy(fb, s_page,
                    (size_t)BSP_LCD_H_RES * BSP_LCD_V_RES * sizeof(uint16_t));
         }
@@ -238,7 +246,9 @@ void app_main(void)
         local.baseline_y = params.baseline_y - box.y;
         clawd_draw(&scratch_canvas, &local);
 
-        /* 2) 整块拷进帧缓冲——一次线性写入，不暴露中间态 */
+        /* 2) 等到帧起点，再整块拷进帧缓冲——一次线性写入，不暴露中间态。
+         *    合成区在 y=50..260，从帧起点开始拷就有足够余量跑在扫描线前面。 */
+        bsp_display_wait_swap();
         for (int row = 0; row < box.h; row++) {
             const int dst_y = box.y + row;
             if (dst_y < 0 || dst_y >= BSP_LCD_V_RES) continue;

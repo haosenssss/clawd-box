@@ -152,6 +152,14 @@ esp_err_t bsp_display_flush(const void *bitmap)
 void bsp_display_wait_swap(void)
 {
     if (s_swap_done == NULL) return;
+    /*
+     * **必须先清掉积压的那一次。**
+     * on_vsync 每帧都 give，信号量几乎总是已经是"有"的状态；
+     * 直接 take 会立刻返回，等于压根没同步——调用方以为自己等到了
+     * 帧起点，实际上停在扫描的任意位置，写下去就是撕裂。
+     * 清空之后再等，拿到的才是**下一次** VSYNC。
+     */
+    xSemaphoreTake(s_swap_done, 0);
     /* 超时兜底：万一 VSYNC 停了也不能把渲染线程卡死 */
     xSemaphoreTake(s_swap_done, pdMS_TO_TICKS(100));
 }
