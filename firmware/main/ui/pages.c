@@ -37,16 +37,25 @@ static void format_countdown(char *out, size_t n, int64_t resets_at, int64_t now
      * 一是分钟级精度对 5 小时/7 天的窗口毫无意义，二是这一列每多两个字符，
      * 上面的精灵和额度条就得同步变窄——横向预算是死的，字省下来的都归了图形。
      */
-    const int64_t days = left / 86400;
-    const int64_t hours = left / 3600;
-    const int64_t mins = (left % 3600) / 60;
-    /* d / h / m 的倒计时写法，最长五个字符（2h45m）。
+    /* 全部夹进两位数再输出。不夹的话 %lld 的理论宽度是 20 位，
+     * 编译器无法证明写得下，-O2 下会直接报 format-truncation。
+     * 夹完最长是 "99d23h"，六个字符。 */
+    int days = (int)(left / 86400);
+    if (days > 99) days = 99;
+    int hours = (int)(left / 3600);
+    if (hours > 99) hours = 99;
+    int mins = (int)((left % 3600) / 60);
+    if (mins < 0) mins = 0;
+    if (mins > 59) mins = 59;
+    /* d / h / m 的倒计时写法。
      * 右侧那一列的宽度就是按这个上限定的——它反过来卡住了图形能多宽。 */
-    const int64_t rem_h = (left % 86400) / 3600;
-    if (days > 0 && rem_h > 0)  snprintf(out, n, "%lldd%lldh", (long long)days, (long long)rem_h);
-    else if (days > 0)          snprintf(out, n, "%lldd", (long long)days);
-    else if (hours > 0)         snprintf(out, n, "%lldh%lldm", (long long)hours, (long long)mins);
-    else                        snprintf(out, n, "%lldm", (long long)mins + 1);
+    int rem_h = (int)((left % 86400) / 3600);
+    if (rem_h < 0) rem_h = 0;
+    if (rem_h > 23) rem_h = 23;
+    if (days > 0 && rem_h > 0)  snprintf(out, n, "%dd%dh", days, rem_h);
+    else if (days > 0)          snprintf(out, n, "%dd", days);
+    else if (hours > 0)         snprintf(out, n, "%dh%dm", hours, mins);
+    else                        snprintf(out, n, "%dm", mins + 1);
 }
 
 /**

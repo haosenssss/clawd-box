@@ -75,11 +75,21 @@ void app_main(void)
     s_page = heap_caps_malloc((size_t)BSP_LCD_H_RES * BSP_LCD_V_RES * sizeof(uint16_t),
                               MALLOC_CAP_SPIRAM);
     ESP_ERROR_CHECK(s_page == NULL ? ESP_ERR_NO_MEM : ESP_OK);
-    s_scratch = heap_caps_malloc((size_t)s_scratch_w * s_scratch_h * sizeof(uint16_t),
-                                 MALLOC_CAP_SPIRAM);
+    /*
+     * **scratch 必须放片内 SRAM。**
+     * 精灵的抗锯齿混色是逐像素读-改-写（blend565 要先读目标像素），
+     * 放在 PSRAM 上等于每个像素撞一次 cache miss：
+     * 实测同一份代码在 Mac 上 0.116ms/帧，板上 82ms——差 700 倍，
+     * 而两边的**状态间比例完全一致**，说明瓶颈不在算法而在访存。
+     * 片内放不下时退回 PSRAM：慢，但至少能跑。
+     */
+    const size_t scratch_bytes = (size_t)s_scratch_w * s_scratch_h * sizeof(uint16_t);
+    s_scratch = heap_caps_malloc(scratch_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    const bool scratch_internal = s_scratch != NULL;
+    if (!scratch_internal) s_scratch = heap_caps_malloc(scratch_bytes, MALLOC_CAP_SPIRAM);
     ESP_ERROR_CHECK(s_scratch == NULL ? ESP_ERR_NO_MEM : ESP_OK);
-    printf("  离屏缓冲 %dx%d (%u KB)\n", s_scratch_w, s_scratch_h,
-           (unsigned)((size_t)s_scratch_w * s_scratch_h * 2 / 1024));
+    printf("  离屏缓冲 %dx%d (%u KB, %s)\n", s_scratch_w, s_scratch_h,
+           (unsigned)(scratch_bytes / 1024), scratch_internal ? "片内SRAM" : "PSRAM");
     ESP_ERROR_CHECK(bsp_display_backlight(true));
 
     ESP_ERROR_CHECK(link_start(&s_model));

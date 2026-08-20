@@ -25,3 +25,8 @@ CONFIG_ESP_CONSOLE_UART_DEFAULT=y
 # UART 硬件 FIFO（128B）来不及排空就丢字节。实测症状：单帧从不出错，
 # 但 resync 一次性连发 6~7 帧时必然粘连丢中段。
 CONFIG_UART_ISR_IN_IRAM=y
+
+# ---- 编译优化 ----
+# 默认是 -Og 调试档：精灵渲染是浮点密集的逐像素循环，
+# 调试档下单帧 74ms（13fps），动画必然发顿。-O2 是这里最划算的一步。
+CONFIG_COMPILER_OPTIMIZATION_PERF=y

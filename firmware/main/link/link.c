@@ -11,7 +11,7 @@
 
 #include "cJSON.h"
 #include "driver/uart.h"
-#include "driver/usb_serial_jtag.h"
+#include "hal/usb_serial_jtag_ll.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -39,6 +39,13 @@ static uint32_t s_dropped = 0;
  *
  * 每个来源一份独立的行装配器：两路字节流绝不能拼进同一个缓冲区，
  * 否则半行 A 接上半行 B，解析出来的是彻头彻尾的假数据。
+ *
+ * **绝不能用 usb_serial_jtag_driver_install()。** 试过，代价惨重：
+ * IDF 的次级控制台（ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG）本来就占着这个外设，
+ * 装驱动后控制台输出改走驱动的 TX 环形缓冲并会阻塞，
+ * 渲染单帧从 27ms 一路劣化到 114ms，几分钟后日志彻底卡死。
+ * 这里只轮询硬件 RX FIFO：不注册中断、不碰 TX 通路，
+ * 而且 RX 方向本来就没有第二个读者，不存在争用。
  */
 typedef struct {
     char buf[LINK_LINE_MAX];
@@ -48,7 +55,6 @@ typedef struct {
 
 static line_asm_t s_uart_line;
 static line_asm_t s_usb_line;
-static bool s_usb_ready = false;
 
 static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 
@@ -217,12 +223,12 @@ static void link_task(void *arg)
             total_bytes += (uint32_t)n;
             feed(&s_uart_line, chunk, n);
         }
-        if (s_usb_ready) {
-            const int m = usb_serial_jtag_read_bytes(chunk, sizeof(chunk), 0);
-            if (m > 0) {
-                total_bytes += (uint32_t)m;
-                feed(&s_usb_line, chunk, m);
-            }
+        /* 自带 USB 口：直接把硬件 RX FIFO 抽干，一次最多 64 字节 */
+        while (usb_serial_jtag_ll_rxfifo_data_available()) {
+            const uint32_t m = usb_serial_jtag_ll_read_rxfifo(chunk, 64);
+            if (m == 0) break;
+            total_bytes += m;
+            feed(&s_usb_line, chunk, (int)m);
         }
         const uint32_t t = now_ms();
         if (total_bytes > 0 && t - report_at > 3000) {
@@ -269,25 +275,11 @@ esp_err_t link_start(model_t *model)
     /* 早一点触发排空，别等到 FIFO 快满（默认 120/128）才动 */
     uart_set_rx_full_threshold(LINK_UART, 40);
 
-    /*
-     * 再把自带 USB 口的接收也接上。日志本来就往这个口抄一份，
-     * 不接收的话插这个口就是"有日志、无数据"，很难自查。
-     * 装不上不算致命——CH343P 那条路依然可用。
-     */
-    usb_serial_jtag_driver_config_t usb_cfg = {
-        .tx_buffer_size = 256,
-        .rx_buffer_size = 2048,
-    };
-    const esp_err_t usb_err = usb_serial_jtag_driver_install(&usb_cfg);
-    s_usb_ready = (usb_err == ESP_OK || usb_err == ESP_ERR_INVALID_STATE);
-    if (!s_usb_ready) ESP_LOGW(TAG, "USB-JTAG 接收未启用: %s", esp_err_to_name(usb_err));
-
     /* 钉到 CPU1：渲染循环跑在 CPU0 且密集读写 PSRAM，同核会把链路任务饿住。 */
     if (xTaskCreatePinnedToCore(link_task, "link", 4096, NULL, 5, NULL, 1) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
-    ESP_LOGI(TAG, "串口链路就绪：UART0%s（沿用控制台波特率）",
-             s_usb_ready ? " + USB-JTAG" : "");
+    ESP_LOGI(TAG, "串口链路就绪：UART0 + USB-JTAG（沿用控制台波特率）");
     return ESP_OK;
 }
 
