@@ -15,9 +15,7 @@
 #include "sprite/clawd.h"
 #include "sprite/text.h"
 #include "audio/audio.h"
-#include "bsp/bsp_imu.h"
 #include "input/input.h"
-#include "motion.h"
 #include "ui/pager.h"
 #include "ui/pages.h"
 #include "ui/theme.h"
@@ -45,7 +43,6 @@ static model_t s_model;
 static uint16_t *s_page = NULL;
 static uint16_t *s_scratch = NULL;
 static uint32_t s_frame_ms = 0;
-static bsp_accel_t s_accel_dbg = {0};
 static int s_scratch_w = 0;
 static int s_scratch_h = 0;
 
@@ -73,14 +70,8 @@ void app_main(void)
     ui_clear_all(fb_main, COL_BG);
 
     /* scratch 按精灵包围盒的最大可能尺寸一次分配，稳态零 malloc */
-    /*
-     * 离屏缓冲要**把重力位移的范围一起包进来**。
-     * 合成区一旦跟着精灵移动，上一帧的位置就没人擦，会拖出残影；
-     * 把区域固定成"静止包围盒 + 两侧各留 MOTION_MAX_PX"，
-     * 精灵在里面动，区域本身不动，一次线性拷贝就把残影覆盖掉了。
-     */
-    s_scratch_w = (int)((CLAWD_UNIT_W + 4) * SPRITE_SCALE) + 8 + 2 * MOTION_MAX_PX_I;
-    s_scratch_h = (int)((10 + 4) * SPRITE_SCALE) + 8 + 2 * MOTION_MAX_PX_I;
+    s_scratch_w = (int)((CLAWD_UNIT_W + 4) * SPRITE_SCALE) + 8;
+    s_scratch_h = (int)((10 + 4) * SPRITE_SCALE) + 8;
     s_page = heap_caps_malloc((size_t)BSP_LCD_H_RES * BSP_LCD_V_RES * sizeof(uint16_t),
                               MALLOC_CAP_SPIRAM);
     ESP_ERROR_CHECK(s_page == NULL ? ESP_ERR_NO_MEM : ESP_OK);
@@ -98,13 +89,8 @@ void app_main(void)
     ESP_ERROR_CHECK(input_init());
     /* 没喇叭不致命——界面照常工作，只是不出声 */
     if (audio_init() != ESP_OK) printf("  音频不可用，静音运行\n");
-    const bool has_imu = (bsp_imu_init() == ESP_OK);
-    motion_t motion;
-    motion_init(&motion);
-
     pager_t pager;
     pager_init(&pager, now_ms());
-    uint32_t motion_prev_ms = now_ms();
 
     uint32_t state_since = now_ms();
     clawd_state_t last_state = CLAWD_SLEEPING;
@@ -183,21 +169,6 @@ void app_main(void)
             .shadow_color = COL_BG,
         };
 
-        /* 重力：倾斜时精灵朝低处偏一点，晃动时弹一下。不是水平仪，克制为上。 */
-        float dx = 0.0f, dy = 0.0f;
-        if (on_session_page) {
-            bsp_accel_t a = {0};
-            const bool got = has_imu && bsp_imu_read(&a);
-            const float dt = (float)(t - motion_prev_ms) / 1000.0f;
-            motion_prev_ms = t;
-            if (got) s_accel_dbg = a;
-            if (motion_step(&motion, got, a.x, a.y, dt) && focus != NULL) {
-                state_since = t; /* 晃一下＝把当前动作从头演一遍 */
-            }
-            dx = motion.x;
-            dy = motion.y;
-        }
-
         /*
          * 界面静态部分：**整屏离屏合成，再一次线性拷过去**。
          *
@@ -232,11 +203,6 @@ void app_main(void)
 
       if (on_session_page) {
         clawd_rect_t box = clawd_bounds(&params);
-        /* 静止包围盒向外扩出位移范围，让合成区固定不动 */
-        box.x -= MOTION_MAX_PX_I;
-        box.y -= MOTION_MAX_PX_I;
-        box.w += 2 * MOTION_MAX_PX_I;
-        box.h += 2 * MOTION_MAX_PX_I;
         /*
          * **合成区必须夹在一条安全带里。**
          * 它每帧都被整块覆盖，一旦上缘越过 subagent 圆点、下缘压到项目名，
@@ -258,8 +224,8 @@ void app_main(void)
         const clawd_canvas_t scratch_canvas = {
             .pixels = s_scratch, .width = box.w, .height = box.h};
         clawd_draw_t local = params;
-        local.center_x = params.center_x + (int)dx - box.x;
-        local.baseline_y = params.baseline_y + (int)dy - box.y;
+        local.center_x = params.center_x - box.x;
+        local.baseline_y = params.baseline_y - box.y;
         clawd_draw(&scratch_canvas, &local);
 
         /* 2) 整块拷进帧缓冲——一次线性写入，不暴露中间态 */
@@ -277,15 +243,14 @@ void app_main(void)
         if (ring != last_active || (uint32_t)(t - report_at) > 10000) {
             last_active = ring;
             report_at = t;
-            printf("  页=%s 在环=%d/%d 焦点=%s 状态=%d sub=%d/%d ctx=%.0f%% 5h=%.0f%% wk=%.0f%% 帧=%lums 丢帧=%lu g=(%.2f,%.2f,%.2f)\n",
+            printf("  页=%s 在环=%d/%d 焦点=%s 状态=%d sub=%d/%d ctx=%.0f%% 5h=%.0f%% wk=%.0f%% 帧=%lums 丢帧=%lu\n",
                    on_session_page ? "会话" : "管理",
                    ring, model_active_count(&s_model), focus ? focus->name : "-", (int)state,
                    focus ? model_sub_done(focus) : 0, focus ? model_sub_total(focus) : 0,
                    (double)(focus ? focus->ctx_pct : -1.0f),
                    (double)s_model.limits.five_hour.pct,
                    (double)s_model.limits.seven_day.pct,
-                   (unsigned long)s_frame_ms, (unsigned long)link_dropped(),
-                   (double)s_accel_dbg.x, (double)s_accel_dbg.y, (double)s_accel_dbg.z);
+                   (unsigned long)s_frame_ms, (unsigned long)link_dropped());
         }
 
         /*

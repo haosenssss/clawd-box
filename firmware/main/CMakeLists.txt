@@ -8,8 +8,6 @@ idf_component_register(
         "model/sessions.c"
         "link/link.c"
         "bsp/bsp_touch.c"
-        "bsp/bsp_imu.c"
-        "motion.c"
         "audio/audio.c"
         "input/input.c"
         "ui/pages.c"
