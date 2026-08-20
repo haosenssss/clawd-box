@@ -27,5 +27,4 @@ idf_component_register(
         esp_psram
         esp_timer
         json
-        esp_driver_usb_serial_jtag
 )
