@@ -13,7 +13,7 @@
  *   "statusLine": { "type": "command", "command": "bun run <abs>/host/bin/statusline.ts" }
  */
 
-import { deliver, readStdinJson } from './send.ts'
+import { deliver, readStdinJson } from '../src/deliver.ts'
 import { parseStatusLineLimits, type WindowLimit } from '../src/limits.ts'
 
 /** 超过这个百分比就标记为吃紧 */

@@ -1,5 +1,5 @@
 /**
- * 往守护进程的 UDS 投递一条消息。两个入口脚本共用。
+ * 往守护进程的 UDS 投递一条消息。hook.ts 与 statusline.ts 共用。
  *
  * 铁律：**永不阻塞、永不抛错。** 这段代码跑在 Claude Code 的关键路径上
  * （statusLine 每条 assistant 消息触发一次，钩子每轮对话触发多次），

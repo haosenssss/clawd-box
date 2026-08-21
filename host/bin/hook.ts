@@ -23,7 +23,7 @@
  *   Notification · SessionStart · SessionEnd
  */
 
-import { deliver, readStdinJson } from './send.ts'
+import { deliver, readStdinJson } from '../src/deliver.ts'
 
 /** 只转发我们真正会用到的事件，其余直接丢——减少守护进程侧噪声。 */
 const FORWARDED_EVENTS: ReadonlySet<string> = new Set([
