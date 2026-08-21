@@ -354,9 +354,11 @@ static void transform_rect(const view_t *v, const rect_t *r, float pivot_x, floa
 #define SPARK_A clawd_rgb565(0xFF, 0xD7, 0x00)
 #define SPARK_B clawd_rgb565(0xFF, 0xF5, 0x9D)
 #define BULB_ON clawd_rgb565(0xFF, 0xD4, 0x00)
-#define BULB_OFF clawd_rgb565(0x8A, 0x74, 0x28)
+/* 灭掉的灯泡是**冷灰玻璃**，不是暗黄。用 0x8A7428 那档暗黄时，
+ * 屏上读出来是一坨脏橄榄绿，像发霉不像玻璃。 */
+#define BULB_OFF clawd_rgb565(0x70, 0x79, 0x86)
 #define BULB_EDGE_ON clawd_rgb565(0xFF, 0xB0, 0x00)
-#define BULB_EDGE_OFF clawd_rgb565(0x72, 0x5B, 0x20)
+#define BULB_EDGE_OFF clawd_rgb565(0x45, 0x4B, 0x54)
 #define ZZZ_COL clawd_rgb565(0xB0, 0xBE, 0xC5)
 
 /** 抗锯齿的圆。泡泡、火花这类小圆件用它，方块拼出来的圆在这个尺度上很硬。 */
@@ -764,30 +766,46 @@ static void props_working(const clawd_canvas_t *canvas, const view_t *v, uint32_
     }
 }
 
-/* --- 完成：四周迸出火花 --- */
-#define SPARK_COUNT 6
-static const float SPARK_X[SPARK_COUNT] = {-1.6f, 16.6f, 16.2f, -1.2f, 7.5f, -0.8f};
-static const float SPARK_Y[SPARK_COUNT] = {5.2f, 4.6f, 11.0f, 12.0f, 3.6f, 8.4f};
-static const uint32_t SPARK_DELAY[SPARK_COUNT] = {0, 250, 500, 750, 1000, 580};
-#define SPARK_PERIOD 1500
+/* --- 完成：一场小型狂欢 --- */
 
-#define CONFETTI_COUNT 10
+/** 一片翻滚的彩纸：**带角度的矩形**，不是轴对齐的小方块。
+ *  原来用 0.22~0.56 宽的正方形，在屏上就是一串抖动的色点，读作坏点；
+ *  拉长、给角度、让它边落边翻，才读得出"纸片"。 */
+static void draw_ribbon(const clawd_canvas_t *canvas, const view_t *v, float x, float y,
+                        float w, float h, float ang, float bdy, uint16_t col)
+{
+    const float c = cosf(ang), sn = sinf(ang);
+    const float hw = w * 0.5f, hh = h * 0.5f;
+    const float px[4] = {-hw, hw, hw, -hw};
+    const float py[4] = {-hh, -hh, hh, hh};
+    float xs[4], ys[4];
+    for (int i = 0; i < 4; i++) {
+        xs[i] = x + px[i] * c - py[i] * sn;
+        ys[i] = y + px[i] * sn + py[i] * c;
+    }
+    put_unit_quad(canvas, v, xs, ys, bdy, col);
+}
+
+#define CONFETTI_COUNT 9
 /* **全部落在身体轮廓之外**（躯干占 2..13）。
  * 第一版横向铺满，结果彩纸糊了角色一身，像出疹子。 */
-static const float CONF_X[CONFETTI_COUNT] = {-1.7f, -1.0f, -0.3f, 0.3f, 1.0f,
-                                             14.0f, 14.7f, 15.4f, 16.1f, 16.8f};
-static const uint32_t CONF_DELAY[CONFETTI_COUNT] = {0,   140, 280, 420, 560,
-                                                    700, 840, 980, 1120, 1260};
-static const uint16_t CONF_COL[4] = {0, 0, 0, 0}; /* 运行时填，见下 */
+static const float CONF_X[CONFETTI_COUNT] = {-1.7f, -0.9f, -0.1f, 0.7f,
+                                             14.2f, 15.0f, 15.8f, 16.6f, 1.5f};
+static const uint32_t CONF_DELAY[CONFETTI_COUNT] = {0,   290, 580, 870,
+                                                    145, 435, 725, 1015, 1160};
+
+#define SPARK_COUNT 5
+static const float SPARK_X[SPARK_COUNT] = {-1.5f, 16.4f, 16.0f, -1.0f, 7.5f};
+static const float SPARK_Y[SPARK_COUNT] = {5.4f, 4.8f, 10.6f, 11.4f, 3.6f};
+static const uint32_t SPARK_DELAY[SPARK_COUNT] = {0, 260, 520, 780, 1040};
+#define SPARK_PERIOD 1300
 
 /*
- * 完成：一场小型狂欢。
- *
  * 三层叠在一起才够"大胆"：
  *   1. **顶点爆环**——只在滞空最高点迸发。定时闪的火花跟跳跃没关系，
  *      看着就是背景装饰；卡在顶点上，它才是这一跳"炸出来"的
- *   2. **彩纸下落**——横向铺开、错峰、边落边摆，把整个画面填满
- *   3. **常驻火花**——补在四角，让空档期也不冷场
+ *   2. **彩纸下落**——错峰、边落边翻，把整个画面填满
+ *   3. **四角星**——补在空档期，和 DJ 态用的是同一套视觉语言
  */
 static void props_done(const clawd_canvas_t *canvas, const view_t *v, uint32_t t, float bdy)
 {
@@ -796,49 +814,59 @@ static void props_done(const clawd_canvas_t *canvas, const view_t *v, uint32_t t
     /* 1) 顶点爆环：40%~60% 是滞空段，50% 是最高点 */
     if (ph1s >= 380 && ph1s < 660) {
         const float k = (float)(ph1s - 380) / 280.0f;
-        const float r = 3.2f + k * 5.0f;      /* 向外扩张 */
-        const float dot = 0.42f * (1.0f - k); /* 越扩越细，自然消散 */
+        /*
+         * 起始半径要大到**一扩就能露头**。原来从 3.2 起、且光点线性缩到 0，
+         * 结果是：小半径时整圈都埋在身体里，等扩出轮廓时点已经缩没了——
+         * 爆环等于白画。从 4.5 起、纵向压缩放宽到 0.85（更接近正圆），
+         * 光点只从 0.48 收到 0.18 不归零，才看得见。
+         */
+        const float r = 4.5f + k * 5.5f;
+        const float dot = 0.48f - k * 0.30f;
         if (dot > 0.06f) {
             for (int i = 0; i < 10; i++) {
                 const float ang = (float)i * 0.6283185f;
                 const float x = 7.5f + cosf(ang) * r;
-                const float y = 9.0f + sinf(ang) * r * 0.62f;
+                const float y = 9.0f + sinf(ang) * r * 0.85f;
+                /*
+                 * **落在身体轮廓里的点直接跳过。**
+                 * 爆环从半径 3.2 起扩，前几帧整圈都在躯干（x 2..13、y 6..13）
+                 * 里面，光点糊了角色一身——就是"出疹子"那个观感。
+                 * 跳过之后，光点只从剪影外面冒出来，读作"从身后炸开"，
+                 * 遮挡关系反而把爆发感做实了。
+                 */
+                if (x > 1.8f && x < 13.2f && y > 5.8f && y < 13.2f) continue;
                 put_unit_circle(canvas, v, x, y, dot, bdy, (i & 1) ? SPARK_A : SPARK_B);
             }
         }
     }
 
-    /* 2) 彩纸：从画面上方落下，边落边横向摆 */
+    /* 2) 彩纸：从画面上方落下，边落边横向摆、边翻面 */
     for (int i = 0; i < CONFETTI_COUNT; i++) {
-        const uint32_t cp = (t + CONF_DELAY[i] * 3) % 2600;
+        const uint32_t cp = (t + CONF_DELAY[i] * 2) % 2600;
         const float f = (float)cp / 2600.0f;
-        const float y = 3.4f + f * 13.0f;
+        const float y = 3.2f + f * 13.2f;
         if (y > 15.6f) continue;
-        const float sway = sinf(f * 6.28318f * 2.0f + (float)i) * 0.55f;
-        /* 翻转：宽度随相位收缩再张开，像纸片在翻面 */
-        const float w = 0.22f + 0.34f * fabsf(cosf(f * 6.28318f * 3.0f + (float)i));
+        const float sway = sinf(f * 6.28318f * 2.0f + (float)i) * 0.62f;
+        /* 翻面：宽度随相位收缩再张开；角度持续转，两者一起才像纸片在空中翻滚 */
+        const float w = 0.34f + 0.52f * fabsf(cosf(f * 6.28318f * 3.0f + (float)i));
+        const float ang = f * 6.28318f * 1.6f + (float)i * 0.7f;
         const uint16_t col = (i % 3 == 0) ? SPARK_A : ((i % 3 == 1) ? SPARK_B : BIT_COL);
-        put_unit_rect(canvas, v, CONF_X[i] + sway, y, w, 0.30f, bdy, col);
+        draw_ribbon(canvas, v, CONF_X[i] + sway, y, w, 0.30f, ang, bdy, col);
     }
 
-    /* 3) 常驻火花：两拍结构——先亮中心，再迸四臂 */
+    /* 3) 四角星：一次明灭，起落对称 */
     for (int i = 0; i < SPARK_COUNT; i++) {
         const uint32_t sp = (t + SPARK_DELAY[i]) % SPARK_PERIOD;
-        const uint16_t col = (i & 1) ? SPARK_B : SPARK_A;
-        const float u = 0.40f;
-        if (sp < 200) {
-            put_unit_circle(canvas, v, SPARK_X[i], SPARK_Y[i], u * 0.6f, bdy, col);
-        } else if (sp < 460) {
-            put_unit_rect(canvas, v, SPARK_X[i] - u * 0.5f, SPARK_Y[i] - u * 1.9f, u, u, bdy, col);
-            put_unit_rect(canvas, v, SPARK_X[i] - u * 0.5f, SPARK_Y[i] + u * 0.9f, u, u, bdy, col);
-            put_unit_rect(canvas, v, SPARK_X[i] - u * 1.9f, SPARK_Y[i] - u * 0.5f, u, u, bdy, col);
-            put_unit_rect(canvas, v, SPARK_X[i] + u * 0.9f, SPARK_Y[i] - u * 0.5f, u, u, bdy, col);
-        }
+        const float f = (float)sp / (float)SPARK_PERIOD;
+        if (f > 0.40f) continue;
+        const float sz = sinf((f / 0.40f) * 3.1416f);
+        if (sz < 0.10f) continue;
+        draw_bling(canvas, v, SPARK_X[i], SPARK_Y[i], sz * 1.25f,
+                   (i & 1) ? SPARK_B : SPARK_A);
     }
-    (void)CONF_COL;
 }
 
-/* --- 等待输入：头顶举起的灯泡 + 一闪一闪的光线 --- */
+/* --- 等待输入：手举起来的灯泡 --- */
 static void props_waiting(const clawd_canvas_t *canvas, const view_t *v, uint32_t t, float bdy,
                           float lift)
 {
@@ -847,43 +875,56 @@ static void props_waiting(const clawd_canvas_t *canvas, const view_t *v, uint32_
 
     const bool lit = (ph >= 0.20f);
     /*
-     * **灯泡长在手上，不是飘在角落。** 手臂抬起时 lift 是负的，
-     * 灯泡跟着一起走，两者才是一个动作；固定坐标的话它就只是
-     * 右上角一个自己闪的黄块，和角色毫无关系。
+     * **灯泡坐在指尖上，位置是从臂角反解出来的，不是写死的坐标。**
+     *
+     * 右臂举起时转到 -90°（绕肩关节 (13,10)、臂长 2），手掌那条外边落在
+     * x=12..14、y=8，指尖中点就是 (13, 8+lift)。原来把灯泡钉在 x=14.4，
+     * 手举在正上方、灯泡却飘在右边——两者差着一整个手掌的宽度，
+     * 于是读出来是"举着空气"外加"右上角一个自己在闪的黄块"。
+     *
+     * 顺序也讲究：灯头压在手上，玻璃泡再叠在灯头上，
+     * 三者接触才有"攥住"的感觉。
      */
-    const float cx = 14.4f, cy = 8.4f + lift;
+    const float hand_x = 13.0f, hand_y = 8.0f + lift;
+    const float base_h = 0.70f, glass_r = 1.05f;
+    const float glass_cy = hand_y - base_h - glass_r * 0.90f;
 
-    /* 玻璃泡用圆的——方的读不出"灯泡"，只是一个色块。灯头留方，形成对比。 */
-    put_unit_circle(canvas, v, cx, cy - 0.15f, 1.05f, bdy, lit ? BULB_ON : BULB_OFF);
-    put_unit_rect(canvas, v, cx - 0.5f, cy + 0.72f, 1.0f, 0.62f, bdy,
+    /* 灯头留方，玻璃泡用圆——方的读不出"灯泡"，只是一个色块，
+     * 两种形状对比才立得住。 */
+    put_unit_rect(canvas, v, hand_x - 0.48f, hand_y - base_h, 0.96f, base_h, bdy,
                   lit ? BULB_EDGE_ON : BULB_EDGE_OFF);
+    put_unit_circle(canvas, v, hand_x, glass_cy, glass_r, bdy, lit ? BULB_ON : BULB_OFF);
+    /* 玻璃上一点高光，灭着的时候尤其需要——纯色圆读不出"玻璃" */
+    put_unit_circle(canvas, v, hand_x - glass_r * 0.34f, glass_cy - glass_r * 0.36f,
+                    glass_r * 0.22f, bdy,
+                    lit ? clawd_rgb565(0xFF, 0xF4, 0xB0) : clawd_rgb565(0xA8, 0xB2, 0xBE));
 
     if (!lit) return;
-    /* 光线：按不规则节拍闪。规则闪烁看着像故障灯，不规则才像"灵光一现"。 */
+    /* 光线：按不规则节拍闪。规则闪烁看着像故障灯，不规则才像"灵光一现"。
+     * 全部以玻璃泡中心为原点向外发散——原来是绕着一个固定点发散的，
+     * 灯泡一动光线就跟不上了。 */
     const uint32_t beat = (t % 1000);
     if (beat > 620) return;
-    const float len = 1.0f, w = 0.34f;
-    put_unit_rect(canvas, v, cx - w * 0.5f, cy - 2.6f, w, len, bdy, BULB_ON);
-    put_unit_rect(canvas, v, cx - 2.6f, cy - w * 0.5f, len, w, bdy, BULB_ON);
-    put_unit_rect(canvas, v, cx + 1.6f, cy - w * 0.5f, len, w, bdy, BULB_ON);
-    put_unit_rect(canvas, v, cx - 2.1f, cy - 2.1f, 0.7f, 0.7f, bdy, BULB_ON);
-    put_unit_rect(canvas, v, cx + 1.5f, cy - 2.1f, 0.7f, 0.7f, bdy, BULB_ON);
+    const float w = 0.30f;
+    for (int i = 0; i < 6; i++) {
+        const float ang = 3.1416f + (float)i * 0.6283f; /* 上半圈六道 */
+        const float r0 = glass_r + 0.45f, r1 = glass_r + 1.35f;
+        const float cx0 = hand_x + cosf(ang) * r0, cy0 = glass_cy + sinf(ang) * r0;
+        const float cx1 = hand_x + cosf(ang) * r1, cy1 = glass_cy + sinf(ang) * r1;
+        const float nx = -sinf(ang) * w * 0.5f, ny = cosf(ang) * w * 0.5f;
+        put_unit_quad(canvas, v,
+                      (const float[]){cx0 + nx, cx1 + nx, cx1 - nx, cx0 - nx},
+                      (const float[]){cy0 + ny, cy1 + ny, cy1 - ny, cy0 - ny}, bdy, BULB_ON);
+    }
 }
 
-/* --- 睡觉：飘起来的 Z --- */
-static void draw_pixel_z(const clawd_canvas_t *canvas, const view_t *v, float x, float y,
-                         float u, float bdy, uint16_t col)
-{
-    put_unit_rect(canvas, v, x, y, u * 4.0f, u, bdy, col);            /* 上横 */
-    put_unit_rect(canvas, v, x + u * 2.0f, y + u, u, u, bdy, col);    /* 斜 */
-    put_unit_rect(canvas, v, x + u, y + u * 2.0f, u, u, bdy, col);    /* 斜 */
-    put_unit_rect(canvas, v, x, y + u * 3.0f, u * 4.0f, u, bdy, col); /* 下横 */
-}
-
-#define Z_COUNT 3
-static const uint32_t Z_DELAY[Z_COUNT] = {0, 2000, 4000};
-#define Z_PERIOD 6000
-
+/* --- 睡觉：鼻子上的呼吸泡泡 ---
+ *
+ * **不画 Z。** 原来 Z 和泡泡同时存在，两个都在表达"睡着了"，
+ * 是重复的；而且四个矩形拼出来的 Z 在这个尺度上边缘全是台阶，
+ * 屏上读作乱码而不是字母。留泡泡：它独一份、和呼吸严格同相，
+ * 而且鼓大再啵一下破掉本身就是个完整的段子。
+ */
 static void props_sleeping(const clawd_canvas_t *canvas, const view_t *v, uint32_t t, float bdy)
 {
     /*
@@ -927,17 +968,6 @@ static void props_sleeping(const clawd_canvas_t *canvas, const view_t *v, uint32
         }
     }
 
-    for (int i = 0; i < Z_COUNT; i++) {
-        const uint32_t ph = (t + Z_DELAY[i]) % Z_PERIOD;
-        const float f = (float)ph / (float)Z_PERIOD;
-        if (f > 0.9f) continue;
-        /* 一边飘一边左右摆，越飘越大——直着往上走看着像字幕，摆起来才像气泡 */
-        const float sway = sinf(f * 6.28318f * 1.5f) * 1.2f;
-        const float x = 12.4f + sway;
-        const float y = 9.5f - f * 5.2f;
-        const float u = 0.34f + f * 0.30f;
-        draw_pixel_z(canvas, v, x, y, u, bdy, ZZZ_COL);
-    }
 }
 
 /* ------------------------------------------------------------------ *
@@ -981,16 +1011,43 @@ static void pose_idle(pose_t *p, uint32_t t)
 {
     apply_breathe_and_blink(p, t);
 
-    static const key_t LOOK[] = {{0.00f, 0.0f},  {0.12f, 0.0f},  {0.18f, -0.9f},
-                                 {0.34f, -0.9f}, {0.40f, 0.0f},  {0.56f, 0.0f},
-                                 {0.62f, 0.9f},  {0.78f, 0.9f},  {0.84f, 0.0f},
-                                 {1.00f, 0.0f}};
-    p->eye_dx += ease_keys(LOOK, 10, phase_of(t, 9000));
+    /*
+     * 周期从 9s 缩到 6.5s，幅度整体放大。
+     *
+     * 原来的问题不是"没做动画"，是**动作太小又太稀**：眼球位移只有
+     * 0.9 个单位（13px 里的一格多），9 秒才走一轮，随便截一帧看都是静止的，
+     * 于是读作"这个状态没动画"。发呆可以慢，但不能让人怀疑它死机了。
+     */
+    const float lp = phase_of(t, 6500);
 
-    static const key_t LEAN[] = {{0.00f, 0.0f}, {0.18f, -1.2f}, {0.34f, -1.2f},
-                                 {0.40f, 0.0f}, {0.62f, 1.2f},  {0.78f, 1.2f},
+    static const key_t LOOK[] = {{0.00f, 0.0f},  {0.10f, 0.0f},  {0.16f, -1.5f},
+                                 {0.34f, -1.5f}, {0.40f, 0.0f},  {0.54f, 0.0f},
+                                 {0.60f, 1.5f},  {0.78f, 1.5f},  {0.84f, 0.0f},
+                                 {1.00f, 0.0f}};
+    p->eye_dx += ease_keys(LOOK, 10, lp);
+
+    /* 转头时眼睛跟着**微微下沉**——纯水平扫视像玻璃珠在滑，
+     * 加一点纵向位移才有"转过去看"的立体感 */
+    static const key_t LOOK_Y[] = {{0.00f, 0.0f}, {0.16f, 0.25f}, {0.34f, 0.25f},
+                                   {0.40f, 0.0f}, {0.60f, 0.25f}, {0.78f, 0.25f},
+                                   {0.84f, 0.0f}, {1.00f, 0.0f}};
+    p->eye_dy += ease_keys(LOOK_Y, 8, lp);
+
+    static const key_t LEAN[] = {{0.00f, 0.0f}, {0.16f, -2.2f}, {0.34f, -2.2f},
+                                 {0.40f, 0.0f}, {0.60f, 2.2f},  {0.78f, 2.2f},
                                  {0.84f, 0.0f}, {1.00f, 0.0f}};
-    p->body_rot += ease_keys(LEAN, 8, phase_of(t, 9000)) * (float)M_PI / 180.0f;
+    p->body_rot += ease_keys(LEAN, 8, lp) * (float)M_PI / 180.0f;
+
+    /*
+     * 每一轮末尾抖一下手臂。
+     * 一段全靠"缓慢摆动"撑着的循环，看久了还是像卡住——
+     * 需要一个**短促、突然**的动作把节奏打断，眼睛才会重新注意到它。
+     */
+    static const key_t TWITCH[] = {{0.00f, 0.0f}, {0.88f, 0.0f}, {0.91f, -14.0f},
+                                   {0.94f, 4.0f}, {0.97f, -6.0f}, {1.00f, 0.0f}};
+    const float tw = ease_keys(TWITCH, 6, lp) * (float)M_PI / 180.0f;
+    p->arm_l_rot += tw;
+    p->arm_r_rot -= tw * 0.6f;
 }
 
 /*
