@@ -4,8 +4,8 @@
 抬眼就能看见，不用切窗口。
 
 > **非官方个人项目**，与 Anthropic 无隶属或背书关系。
-> "Claude" / "Clawd" 是 Anthropic 的商标，角色形象归 Anthropic 所有；
-> 本仓库的 MIT 许可只覆盖源代码。详见 [LICENSE](LICENSE)。
+> "Claude" / "Clawd" 是 Anthropic 的商标，角色形象归 Anthropic 所有。
+> 本仓库以 [MIT](LICENSE) 开源，许可仅覆盖源代码，不覆盖角色形象与商标。
 
 ---
 

@@ -19,18 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-NOTICE / 声明
-
-This is an unofficial, non-commercial fan project. It is not affiliated with,
-endorsed by, or sponsored by Anthropic.
-
-"Claude" and "Clawd" are trademarks of Anthropic. The character likeness
-rendered by this firmware is Anthropic's intellectual property; the MIT license
-above covers only the source code in this repository, not the character design
-or any Anthropic trademark.
-
-本项目为非官方、非商业的个人项目，与 Anthropic 无隶属或背书关系。
-上面的 MIT 许可只覆盖本仓库的源代码，不覆盖角色形象与商标。
