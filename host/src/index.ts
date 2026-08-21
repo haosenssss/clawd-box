@@ -182,7 +182,14 @@ function handleIngest(msg: IngestMessage): void {
 
     case 'Stop':
       // 只有主线程的 Stop 才算一轮结束；subagent 的 Stop 走 SubagentStop
-      if (msg.agentId !== null) break
+      if (msg.agentId !== null) {
+        log(`Stop(带 agent_id=${msg.agentId}) 已忽略，不算一轮结束`)
+        break
+      }
+      /* 完成音是从这里、也只从这里发出去的。留一行日志是为了在
+       * "为什么 subagent 干完也响"这类问题上有据可查——
+       * 靠猜链路会一直绕圈，日志一行就能定位。 */
+      log(`一轮结束 → 完成音  session=${id}`)
       inferredStatus.set(msg.sessionId, 'idle')
       dispatch.emit({ e: 'turn_end', id })
       break
@@ -205,7 +212,11 @@ function handleIngest(msg: IngestMessage): void {
       break
 
     case 'SubagentStop':
-      if (msg.agentId === null) break
+      if (msg.agentId === null) {
+        log('SubagentStop 缺 agent_id，已忽略')
+        break
+      }
+      /* 只点亮圆点，**不出声**。 */
       dispatch.emit({ e: 'sub_stop', id, aid: shortId(msg.agentId) })
       break
 
