@@ -238,7 +238,10 @@ esp_err_t audio_init(void)
 {
     ESP_RETURN_ON_ERROR(i2s_init(&s_tx), TAG, "I2S 初始化失败");
 
-    const audio_codec_i2s_cfg_t i2s_cfg = {.port = I2S_NUM_0, .tx_handle = s_tx};
+    /* 不加 const：上游 audio_codec_new_i2s_data() 的形参是非 const 指针，
+     * 传 const 会触发 -Wdiscarded-qualifiers。它只读这个结构体，
+     * 但签名改不了，只能这边让步。 */
+    audio_codec_i2s_cfg_t i2s_cfg = {.port = I2S_NUM_0, .tx_handle = s_tx};
     const audio_codec_data_if_t *data_if = audio_codec_new_i2s_data(&i2s_cfg);
 
     audio_codec_i2c_cfg_t i2c_cfg = {
