@@ -3,6 +3,20 @@
 > Phase 0 交付物。**所有内容均来自实测或出货固件的开源板级定义，无一处推测。**
 > 来源：① ROM loader 直接探测本机硬件 ② esptool 5.3.1 特性检测 ③ 出厂固件全片备份的分区表与 app 描述符 ④ [xiaozhi-esp32](https://github.com/78/xiaozhi-esp32) `main/boards/waveshare/esp32-s3-touch-lcd-4b/`（即本板出货固件的源码）
 
+> **关于第四项来源**：本仓库不转发 xiaozhi-esp32 的源码文件（那是别人的代码，
+> 有自己的许可）。需要核对原始定义时请直接看上游：
+>
+> ```
+> git clone https://github.com/78/xiaozhi-esp32
+> ls xiaozhi-esp32/main/boards/waveshare/esp32-s3-touch-lcd-4b/
+> #   config.h        引脚宏定义
+> #   config.json     板型与 flash 配置
+> #   *.cc            ST7701 初始化序列、TCA9554 位分配、ES8311 接线
+> ```
+>
+> 下面表里的每一项都经本机实测复核过（I2C 扫描、寄存器读回、逐个外设点亮），
+> 不是照抄——出货固件与实物存在出入的地方已在正文标注。
+
 ---
 
 ## 1. 芯片与存储（实测）

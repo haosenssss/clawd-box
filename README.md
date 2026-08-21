@@ -1,173 +1,142 @@
 # Clawd Box
 
-把 Claude Code 的运行状态显示在一块 **Waveshare ESP32-S3-Touch-LCD-4B**（4″ 480×480 触摸屏，86 盒形态）上。
+把一块 4 寸触摸屏做成 Claude Code 的状态面板。谁在跑、跑到哪、还剩多少额度，
+抬眼就能看见，不用切窗口。
 
-Clawd 小精灵用**动作**表达主 agent 的状态——干活、干完、等你输入是三种明显不同的动作，不是换图标。subagent 用顶部一排圆点（实心=完成，空心=进行中）。底部常驻三条：5 小时限额、周限额、上下文占用。
+> **非官方个人项目**，与 Anthropic 无隶属或背书关系。
+> "Claude" / "Clawd" 是 Anthropic 的商标，角色形象归 Anthropic 所有；
+> 本仓库的 MIT 许可只覆盖源代码。详见 [LICENSE](LICENSE)。
 
 ---
 
-## 账号安全：零额外网络请求
+## 它做什么
 
-这是本项目的第一约束。整个系统**不会向 `api.anthropic.com` 发出任何一个新增请求**，服务端无从知道这个装置存在。
+- **用动作而不是图标表达状态**：打碟（在干活）、跳跃庆祝（干完了）、
+  举灯泡（等你输入）、发呆、睡觉
+- 多个会话时在**活跃会话之间轮播**；只有一个在干活时锁定它
+- 顶部一排圆点是 subagent（实心=完成，空心=进行中）
+- 底部常驻 5 小时 / 7 天额度条与重置倒计时
+- 完成、等你输入、额度告急三种提示音，实时合成，不占 flash
 
-只用两个数据源，都是纯本地读取或官方支持的客户端功能：
+## 硬件
 
-| 数据 | 来源 | 为什么安全 |
+微雪 **ESP32-S3-Touch-LCD-4B**（86 盒形态，4″ 480×480 电容触摸）。
+实测配置：ESP32-S3 rev v0.2、16 MB flash、8 MB octal PSRAM、
+ST7701 RGB 屏、GT911 触摸、ES8311 音频、TCA9554 IO 扩展。
+
+完整引脚表与实测过程见 [docs/pinout.md](docs/pinout.md)。
+
+---
+
+## 最重要的一条设计约束：不给账号添任何风险
+
+**整个项目不向 `api.anthropic.com` 发出任何一个新增请求。** 服务端无从知道
+这个装置存在。数据只有两个来源，都是纯本地读取：
+
+| 来源 | 拿到什么 | 为什么安全 |
 |---|---|---|
-| 5 小时 / 周限额 | `statusLine` 命令的 stdin | Claude Code 从**它自己那次对话的响应头**里解析好放在内存，我们只是读出来。`getRawUtilization()` 是个裸 getter，全树仅 3 处赋值，全在响应头解析路径上。 |
-| 会话状态 / subagent | `~/.claude/sessions/*.json` + `async` 钩子 | 只读本地文件；钩子声明 `"async": true`，Claude Code 立即返回，永不阻塞对话。 |
-| 上下文占用 | `statusLine` 的 `context_window` | 同上，也是已经到手的数字。 |
+| `statusLine` 的 `rate_limits` | 5 小时 / 7 天额度真实值 | Claude Code 自己解析响应头后塞给 statusLine 的内存值，我们只读，不触发任何 I/O |
+| `{"type":"command","async":true}` 钩子 | 会话开始/结束、等待输入、subagent 起止 | `async` 为真时钩子立即返回，永不阻塞对话 |
 
-> **按模型细分的额度（Fable）做不了，已放弃。** 响应头里根本没有这种桶
-> （`unified-7d-opus` 在二进制里 0 处匹配），Claude Desktop 的采样文件也只有
-> 五小时和七天两个字段。唯一有它的是 `~/.claude.json` 里那份只在你手动打开
-> `/usage` 时才刷新的缓存——实测停在 24 天前。**一个看起来实时、实际过期三周的
-> 数字比空着更糟**，而要它变准就只能自己发请求，那是红线。完整证据见
-> `docs/gotchas.md` #11。
+**明确不做的**（都能拿到数据，但都越线）：
 
-**明确排除**的做法：自己调 `/api/oauth/usage`（真实客户端从不轮询该端点）、从 Keychain 取 OAuth token 自发请求、原生 `http` 类型钩子（它是同步阻塞的，默认超时 600 秒）。
+- ❌ 轮询 `/api/oauth/usage` —— 真实客户端的三处调用全部由用户动作触发，**没有任何定时器**，轮询是客户端不存在的请求形态
+- ❌ 从 Keychain 取 OAuth token 自发探测请求 —— 在官方客户端之外使用凭证
+- ❌ 原生 `{"type":"http"}` 钩子 —— 它是 `await` 的，**同步阻塞对话**，默认超时 600 秒
+- ❌ MITM 代理、无头浏览器抓网页端
 
-详见 `docs/` 与实施方案。
-
----
-
-## 目录
-
-```
-host/        Mac 侧守护进程（bun + TypeScript）
-firmware/    ESP-IDF v5.5 固件
-docs/        引脚表、踩坑记录
-backup/      出厂固件全片备份（不进版本库）
-tools/       串口监视器等
-```
+取舍是真实存在的：按模型细分的额度（比如 Fable）只存在于 `/api/oauth/usage`
+的响应体里，所以**我们显示不了**，界面上就留 `--`。宁可少显示一项，
+也不为它发一个请求。
 
 ---
 
-## 快速开始
+## 架构：厚板子，薄主机
 
-### 1. 备份出厂固件（**先做这个**）
+Mac 只做三件必须在 Mac 上做的事——读会话注册表、校验进程存活、
+接住钩子和 statusLine 的 stdin——然后近乎原样转发。
 
-```bash
-uvx esptool --chip esp32s3 --port /dev/cu.usbmodem* --baud 921600 \
-  read-flash 0 0x1000000 backup/factory-full-16MB.bin
+**其余全在板子上**：会话表增删改、计时、状态机与仲裁、动画选择、
+页面路由与轮播、渲染、断线降级。
+
+```
+Claude Code ──钩子/statusLine──▶ 守护进程(bun) ──UART 921600──▶ 板子
+                                      │                          │
+                                 只做转发                   全部业务逻辑
 ```
 
-恢复：把 `read-flash` 换成 `write-flash 0 <文件>`。
-
-### 2. 编译烧录固件
-
-```bash
-brew install cmake ninja                    # ESP-IDF 的 install.sh 在 macOS 上不带
-git clone -b release/v5.5 --recursive https://github.com/espressif/esp-idf.git ~/esp/esp-idf
-cd ~/esp/esp-idf && ./install.sh esp32s3
-
-cd firmware
-source ~/esp/esp-idf/export.sh
-idf.py -p /dev/cu.usbmodem* flash
-```
-
-### 3. 启动守护进程
-
-```bash
-cd host && bun install
-bun run src/index.ts            # 加 --print 可脱离硬件，只打印帧
-```
-
-### 4. 接上 Claude Code
-
-在 `~/.claude/settings.json` 里加（把 `<ABS>` 换成本仓库绝对路径）：
+协议是换行分隔的 JSON，**状态替换而非事件累积**——每帧整行覆盖该会话的状态，
+所以板子上内存是 `O(会话数 × 定长)`，结构上不可能增长：
 
 ```jsonc
-{
-  "statusLine": {
-    "type": "command",
-    "command": "bun run <ABS>/host/bin/statusline.ts"
-  },
-  "hooks": {
-    "UserPromptSubmit": [{ "matcher": "*", "hooks": [
-      { "type": "command", "command": "bun run <ABS>/host/bin/hook.ts", "async": true, "timeout": 5 }]}],
-    "Stop":           [{ "matcher": "*", "hooks": [
-      { "type": "command", "command": "bun run <ABS>/host/bin/hook.ts", "async": true, "timeout": 5 }]}],
-    "SubagentStart":  [{ "matcher": "*", "hooks": [
-      { "type": "command", "command": "bun run <ABS>/host/bin/hook.ts", "async": true, "timeout": 5 }]}],
-    "SubagentStop":   [{ "matcher": "*", "hooks": [
-      { "type": "command", "command": "bun run <ABS>/host/bin/hook.ts", "async": true, "timeout": 5 }]}],
-    "Notification":   [{ "matcher": "*", "hooks": [
-      { "type": "command", "command": "bun run <ABS>/host/bin/hook.ts", "async": true, "timeout": 5 }]}]
-  }
-}
+{"e":"session","id":"dfc3f9ef","name":"weixue","status":"busy"}
+{"e":"turn_end","id":"dfc3f9ef"}
+{"e":"limits","h5":68.2,"h5r":1787160000,"w7":41.0,"w7r":1787600000}
 ```
 
-> `"async": true` 不是可选项。没有它，钩子会同步阻塞每一轮对话。
+---
+
+## 上手
+
+需要 [ESP-IDF v5.5](https://docs.espressif.com/projects/esp-idf/) 和
+[bun](https://bun.sh)。
+
+```bash
+# 1) 固件
+cd firmware
+idf.py set-target esp32s3
+idf.py -p /dev/cu.usbmodem* flash
+
+# 2) 主机守护进程（注册为开机自启）
+./host/launchd/install.sh
+
+# 3) 把钩子与 statusLine 接进 Claude Code
+#    把 host/bin/hook.ts 注册到 UserPromptSubmit / Stop / Notification /
+#    SubagentStart / SubagentStop，全部用 {"type":"command","async":true}；
+#    把 host/bin/statusline.ts 设为 statusLine 命令。
+```
+
+板子有两个 USB 口，**插哪个都能收数据**（日志两个口都输出，
+数据两路都读）。守护进程日志在 `/tmp/clawdbox-daemon.log`。
 
 ---
 
 ## 开发
 
-```bash
-cd host
-bun test                 # 63 个测试
-bunx tsc --noEmit        # 严格类型检查
-
-python3 tools/monitor.py 10 --reset    # 看板子日志
-```
-
----
-
-## 已实现
-
-- 出厂固件备份与完整引脚表（从出货固件的开源板级定义反查，非推测）
-- 主机守护进程：注册表轮询、PID 存活校验、限额三源合并、UDS 接收、串口发送
-- 固件：AXP2101 → TCA9554 → ST7701 480×480 RGB 面板点亮
-- Clawd 参数化渲染器：10 个矩形、四种状态动作、零素材
-- 会话表、subagent 记账、状态仲裁、多会话轮播
-- subagent 圆点、限额条
-
-## 待做
-
-- 文字渲染（会话名 + 状态词、限额百分比）
-- 触摸手势与两个实体按键、管理页
-- 退避式重复提醒
-- IMU 重力效果、ES8311 音效
-
----
-
-## 开机自启
+两个不需要硬件的工具，都是为了不"盲改"：
 
 ```bash
-cp host/launchd/com.clawdbox.daemon.plist ~/Library/LaunchAgents/
-launchctl load ~/Library/LaunchAgents/com.clawdbox.daemon.plist
+# 精灵动效离线预览：同一份 clawd.c 编到本机，直接出图
+cd firmware
+clang -O2 -I main -o /tmp/prev ../tools/preview/preview.c main/sprite/clawd.c -lm
+/tmp/prev /tmp/out.raw        # 输出 "宽 高\n" + RGB888
+
+# 轮播/抢占逻辑的确定性测试（时间是入参，完全可控）
+./tools/logic-test/run.sh
+
+# 主机侧单元测试
+cd host && bun test
 ```
 
-日志在 `/tmp/clawdbox-daemon.log`，**板子自己的输出也会进这个文件**（前缀 `板 |`）。
-
-> 守护进程用同一个 fd 读板子日志，**不要另开进程去 `cat` 那个串口**：
-> CH343P 每次 open 都会拨动 DTR/RTS，那一下毛刺会打掉正在传输的帧——
-> 于是"一接上监控就开始丢帧"，测量本身成了故障源。
-
-路径写死在 plist 里，仓库不在 `~/AI/weixue` 时需要一并改。
+离线预览是这个项目最值钱的一件工具。在有它之前，每版动效都是
+"改完烧进去、问别人好不好看"——等于闭着眼睛画。
 
 ---
 
-## 操作
+## 已知待办
 
-| 动作 | 效果 |
-|---|---|
-| 右滑 / BOOT 长按 1 秒 | 回管理页——**左边永远是管理页**，不管当前停在哪 |
-| 左滑 / BOOT 短按 | 下一个会话页 |
-| 点按 / BOOT 双击 / PWR 短按 | 确认：静音提醒。**视觉状态照旧**，状态本身消失才算完 |
-| 倾斜 / 晃动 | 精灵朝低处偏一点、晃一下弹起。对**静止姿态**取相对值，所以怎么装都居中 |
+- `firmware/main/sprite/clawd.c` 有 1400 多行，超出了本项目自己定的
+  800 行上限。它内部分节清楚（几何 / 光栅化 / 变换 / 道具 / 动作曲线 /
+  对外接口），按概念可以切成 3 个文件，但**必须是纯重构**——
+  验收标准是 `tools/preview` 的输出逐字节不变。
+- DJ 态单帧约 50 ms（20 fps），其余状态 10~28 ms。瓶颈在道具的图元数量。
+  想再快就得上双帧缓冲，或者合并唱片那几层椭圆。
 
-轮播只在"正在干活"和"等待输入"之间进行，空闲会话不占页。
-**恰好一个**会话在干活时直接锁屏在它上面——那一刻你想盯着的就是它。
-手动操作后自动轮播暂停 30 秒。
+## 文档
 
-## 提示音
+- [docs/pinout.md](docs/pinout.md) —— 引脚表、外设地址、分区表，全部实测复核
+- [docs/gotchas.md](docs/gotchas.md) —— 踩过的坑，每条都有现象、根因和验证方法
 
-不放音频资源，正弦振荡器 + 包络实时合成。
-
-| 事件 | 音 | 重复 |
-|---|---|---|
-| 任务完成 | 上行三音 C5-E5-G5 | 只响一次——这是通知不是催促 |
-| 等你输入 | 叩门式重复双音 B5 B5 | 0 / 30s / 1m / 2m / 5m，之后每 5 分钟 |
-| 限额 >95% | 下行低音 | 跨过阈值时一次 |
+`gotchas.md` 值得先读。里面有几条是花了很久才定位的，比如
+"日志能出来不等于数据能进去"、"UART 中断优先级不抬到 LEVEL3 就会整段丢帧"、
+"抗锯齿混色放 PSRAM 上每个像素撞一次 cache miss"。

@@ -1,3 +1,5 @@
+/* 管理页的行高/行距宏（ADMIN_ROW_*）在这里用来把点击的 y 换算成第几行。
+ * 别当成没用的引用删掉——grep 函数名是搜不到宏的。 */
 #include "pager.h"
 
 #include "ui/pages.h"

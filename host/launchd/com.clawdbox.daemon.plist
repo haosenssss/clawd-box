@@ -5,13 +5,11 @@
   KeepAlive 只在异常退出时重启（SuccessfulExit=false）——正常退出说明是
   你自己停的，不该被 launchd 立刻拉起来。
 
-  安装：
-    cp host/launchd/com.clawdbox.daemon.plist ~/Library/LaunchAgents/
-    launchctl load ~/Library/LaunchAgents/com.clawdbox.daemon.plist
-  卸载：
-    launchctl unload ~/Library/LaunchAgents/com.clawdbox.daemon.plist
+  这是**模板**：__BUN__ 和 __REPO__ 由 host/launchd/install.sh 在安装时替换成
+  你机器上的真实路径。不要直接 cp 这个文件。
 
-  注意：路径写死在下面，仓库若不在 ~/AI/weixue 需要一并改。
+  安装：  ./host/launchd/install.sh
+  卸载：  ./host/launchd/install.sh --uninstall
 -->
 <plist version="1.0">
 <dict>
@@ -20,13 +18,13 @@
 
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/shihaosen/.bun/bin/bun</string>
+    <string>__BUN__</string>
     <string>run</string>
-    <string>/Users/shihaosen/AI/weixue/host/src/index.ts</string>
+    <string>__REPO__/host/src/index.ts</string>
   </array>
 
   <key>WorkingDirectory</key>
-  <string>/Users/shihaosen/AI/weixue/host</string>
+  <string>__REPO__/host</string>
 
   <key>RunAtLoad</key>
   <true/>
