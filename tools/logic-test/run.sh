@@ -3,7 +3,7 @@
 #   ./tools/logic-test/run.sh
 set -e
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-clang -O1 -Wall -I "$ROOT/firmware/main" -I "$ROOT/tools/logic-test/stub" \
+clang -O1 -Wall -I "$ROOT/firmware/main" -I "$ROOT/tools/native-stub" \
       -o /tmp/clawd_pager_test \
       "$ROOT/tools/logic-test/pager_test.c" \
       "$ROOT/firmware/main/model/sessions.c" \

@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="820" height="250" viewBox="0 0 820 250" content="&lt;mxfile host=&quot;app.diagrams.net&quot;&gt;&lt;diagram name=&quot;架构&quot;&gt;&lt;mxGraphModel dx=&quot;800&quot; dy=&quot;480&quot; grid=&quot;0&quot; page=&quot;0&quot; background=&quot;#0F0F0E&quot;&gt;
+&lt;root&gt;&lt;mxCell id=&quot;0&quot;/&gt;&lt;mxCell id=&quot;1&quot; parent=&quot;0&quot;/&gt;
+&lt;mxCell id=&quot;cc&quot; value=&quot;Claude Code&amp;#10;多个窗口&quot; style=&quot;rounded=1;arcSize=14;fillColor=#1C1C1A;strokeColor=#3A3A36;fontColor=#E8E6E1;fontSize=15;verticalAlign=middle;&quot; vertex=&quot;1&quot; parent=&quot;1&quot;&gt;&lt;mxGeometry x=&quot;40&quot; y=&quot;90&quot; width=&quot;180&quot; height=&quot;90&quot; as=&quot;geometry&quot;/&gt;&lt;/mxCell&gt;
+&lt;mxCell id=&quot;dm&quot; value=&quot;守护进程&amp;#10;Mac · bun&quot; style=&quot;rounded=1;arcSize=14;fillColor=#1C1C1A;strokeColor=#3A3A36;fontColor=#E8E6E1;fontSize=15;&quot; vertex=&quot;1&quot; parent=&quot;1&quot;&gt;&lt;mxGeometry x=&quot;310&quot; y=&quot;90&quot; width=&quot;180&quot; height=&quot;90&quot; as=&quot;geometry&quot;/&gt;&lt;/mxCell&gt;
+&lt;mxCell id=&quot;bd&quot; value=&quot;板子&amp;#10;ESP32-S3&quot; style=&quot;rounded=1;arcSize=14;fillColor=#2A1A14;strokeColor=#D97757;fontColor=#F5D5C6;fontSize=15;&quot; vertex=&quot;1&quot; parent=&quot;1&quot;&gt;&lt;mxGeometry x=&quot;580&quot; y=&quot;90&quot; width=&quot;180&quot; height=&quot;90&quot; as=&quot;geometry&quot;/&gt;&lt;/mxCell&gt;
+&lt;mxCell id=&quot;e1&quot; value=&quot;钩子 · 状态栏&quot; style=&quot;edgeStyle=orthogonalEdgeStyle;strokeColor=#7A7A74;fontColor=#A8A6A0;fontSize=12;&quot; edge=&quot;1&quot; parent=&quot;1&quot; source=&quot;cc&quot; target=&quot;dm&quot;&gt;&lt;mxGeometry relative=&quot;1&quot; as=&quot;geometry&quot;/&gt;&lt;/mxCell&gt;
+&lt;mxCell id=&quot;e2&quot; value=&quot;串口 921600&quot; style=&quot;edgeStyle=orthogonalEdgeStyle;strokeColor=#D97757;fontColor=#D9A08A;fontSize=12;&quot; edge=&quot;1&quot; parent=&quot;1&quot; source=&quot;dm&quot; target=&quot;bd&quot;&gt;&lt;mxGeometry relative=&quot;1&quot; as=&quot;geometry&quot;/&gt;&lt;/mxCell&gt;
+&lt;mxCell id=&quot;n1&quot; value=&quot;只做转发&quot; style=&quot;text;fontColor=#7A7A74;fontSize=12;align=center;&quot; vertex=&quot;1&quot; parent=&quot;1&quot;&gt;&lt;mxGeometry x=&quot;310&quot; y=&quot;188&quot; width=&quot;180&quot; height=&quot;24&quot; as=&quot;geometry&quot;/&gt;&lt;/mxCell&gt;
+&lt;mxCell id=&quot;n2&quot; value=&quot;会话表 · 状态机 · 动画 · 渲染&quot; style=&quot;text;fontColor=#D9A08A;fontSize=12;align=center;&quot; vertex=&quot;1&quot; parent=&quot;1&quot;&gt;&lt;mxGeometry x=&quot;540&quot; y=&quot;188&quot; width=&quot;260&quot; height=&quot;24&quot; as=&quot;geometry&quot;/&gt;&lt;/mxCell&gt;
+&lt;/root&gt;&lt;/mxGraphModel&gt;&lt;/diagram&gt;&lt;/mxfile&gt;">
+<rect width="820" height="250" rx="10" fill="#0F0F0E"/>
+<g font-family="ui-monospace,SFMono-Regular,Menlo,monospace">
+
+<rect x="40" y="70" width="180" height="90" rx="12" fill="#1C1C1A" stroke="#3A3A36"/>
+<text x="130" y="105" fill="#E8E6E1" font-size="15" text-anchor="middle">Claude Code</text>
+<text x="130" y="130" fill="#8A8880" font-size="12" text-anchor="middle">多个窗口</text>
+
+<rect x="310" y="70" width="180" height="90" rx="12" fill="#1C1C1A" stroke="#3A3A36"/>
+<text x="400" y="105" fill="#E8E6E1" font-size="15" text-anchor="middle">守护进程</text>
+<text x="400" y="130" fill="#8A8880" font-size="12" text-anchor="middle">Mac · bun</text>
+<text x="400" y="185" fill="#6E6C66" font-size="12" text-anchor="middle">只做转发</text>
+
+<rect x="580" y="70" width="180" height="90" rx="12" fill="#2A1A14" stroke="#D97757"/>
+<text x="670" y="105" fill="#F5D5C6" font-size="15" text-anchor="middle">板子</text>
+<text x="670" y="130" fill="#C79079" font-size="12" text-anchor="middle">ESP32-S3</text>
+<text x="670" y="185" fill="#C79079" font-size="12" text-anchor="middle">会话表 · 状态机</text>
+<text x="670" y="203" fill="#C79079" font-size="12" text-anchor="middle">动画 · 渲染</text>
+
+<line x1="222" y1="115" x2="300" y2="115" stroke="#7A7A74" stroke-width="1.6"/>
+<path d="M300 115 l-9 -4.5 v9 z" fill="#7A7A74"/>
+<text x="261" y="105" fill="#A8A6A0" font-size="11.5" text-anchor="middle">钩子 · 状态栏</text>
+
+<line x1="492" y1="115" x2="570" y2="115" stroke="#D97757" stroke-width="1.6"/>
+<path d="M570 115 l-9 -4.5 v9 z" fill="#D97757"/>
+<text x="531" y="105" fill="#D9A08A" font-size="11.5" text-anchor="middle">串口 921600</text>
+
+<text x="410" y="34" fill="#57554F" font-size="12" text-anchor="middle">逻辑全在板子上，Mac 只负责递话</text>
+</g></svg>
