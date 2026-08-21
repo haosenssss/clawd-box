@@ -4,9 +4,9 @@
 
 # Clawd Box
 
-一块 4 寸触摸屏，放在桌上告诉你代码写得怎么样了。
+桌上放一块 4 寸屏，显示 Claude Code 现在在干什么。
 
-谁在跑、跑完没有、还剩多少额度，抬眼就看得见，不用切窗口。
+开着好几个终端的时候，不用挨个切过去看哪个跑完了。
 
 </div>
 
@@ -14,31 +14,38 @@
 
 ## 屏幕上是什么
 
-<img src="assets/screen.png" width="300" align="right" alt="实际屏幕">
+<img src="assets/screen.png" width="290" align="right" alt="板子的真实画面">
 
-上面那张宣传图是概念渲染，右边这张是板子的真实画面，480×480，一个像素没改。
+上面那张宣传图是概念渲染，右边这张才是板子实际显示的东西，480×480，没有修。
 
-- 顶上一排点是子任务，实心的跑完了，空心的还在跑
-- 中间是 Clawd，正在打碟
-- 下面是项目名和当前动作
-- 最下面三根条：5 小时额度、7 天额度、上下文用量，各自带重置倒计时
+顶上那排点代表子任务，实心的已经跑完。中间的 Clawd 在打碟，说明这个项目正忙着。
+往下是项目名和它当前干的事。最底下三根条依次是 5 小时额度、7 天额度和上下文用量，
+后面跟着重置倒计时。
+
+同时开几个项目时会在它们之间轮播，只有一个在忙就锁定那个。跑完了会响一声。
 
 <br clear="right">
 
-## 它会做的动作
+## 五种状态
 
 <table>
 <tr>
-<td width="25%" align="center"><img src="assets/done.gif" width="170" alt=""><br><b>干完了</b><br><sub>蹦起来撒彩纸</sub></td>
-<td width="25%" align="center"><img src="assets/waiting.gif" width="170" alt=""><br><b>等你回话</b><br><sub>举着灯泡抖</sub></td>
-<td width="25%" align="center"><img src="assets/idle.gif" width="170" alt=""><br><b>闲着</b><br><sub>左右张望</sub></td>
-<td width="25%" align="center"><img src="assets/sleeping.gif" width="170" alt=""><br><b>睡着了</b><br><sub>鼻涕泡一鼓一破</sub></td>
+<td width="20%" align="center"><img src="assets/dj.gif" width="150" alt=""></td>
+<td width="20%" align="center"><img src="assets/done.gif" width="150" alt=""></td>
+<td width="20%" align="center"><img src="assets/waiting.gif" width="150" alt=""></td>
+<td width="20%" align="center"><img src="assets/idle.gif" width="150" alt=""></td>
+<td width="20%" align="center"><img src="assets/sleeping.gif" width="150" alt=""></td>
+</tr>
+<tr>
+<td align="center"><b>正在跑</b><br><sub>戴着耳机打碟</sub></td>
+<td align="center"><b>跑完了</b><br><sub>蹦起来撒彩纸</sub></td>
+<td align="center"><b>等你回话</b><br><sub>举着灯泡发抖</sub></td>
+<td align="center"><b>闲着</b><br><sub>左右张望</sub></td>
+<td align="center"><b>没活干</b><br><sub>睡着，冒鼻涕泡</sub></td>
 </tr>
 </table>
 
-状态是用动作演的，不是换图标。扫一眼看姿势就知道在干嘛，不用读字。
-
-同时开几个项目时会在它们之间轮播；只有一个在忙就锁定那个。干完了会响一声。
+状态是用动作演的，不是换个图标。扫一眼看姿势就知道在干嘛。
 
 ## 上手
 
@@ -58,7 +65,7 @@ idf.py -p /dev/cu.usbmodem* flash
 
 板子有两个 USB 口，插哪个都行。
 
-起守护进程，跑一次就好，之后每次开机会自己起来：
+起守护进程。跑一次就好，之后每次开机它会自己起来：
 
 ```bash
 ./host/launchd/install.sh
