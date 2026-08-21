@@ -20,7 +20,9 @@
 static const char *TAG = "audio";
 
 #define SAMPLE_RATE BSP_AUDIO_SAMPLE_RATE
-#define OUT_VOLUME 78
+/* codec 输出音量（0~100）。**要调响先动这里**，不要去动 render() 里的
+ * 幅度常数——那个是为了给和弦叠加留余量的，调大只会削顶失真。 */
+#define OUT_VOLUME 90
 
 /* 一段提示音最长 2.2 秒。留足余量给最后那个长音的余韵——
  * 缓冲不够的话尾音会被硬切，听起来就是"响到一半没了"。 */
@@ -176,7 +178,7 @@ static size_t render(const note_t *seq, int16_t *out, size_t cap)
         if (a > peak) peak = a;
     }
     if (peak > 0) {
-        const float g = 26000.0f / (float)peak;
+        const float g = 30000.0f / (float)peak; /* 32767 的 92%，留一点余量防溢出 */
         for (size_t i = 0; i < n; i++) out[i] = (int16_t)((float)out[i] * g);
     }
     return n;
