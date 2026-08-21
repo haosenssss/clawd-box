@@ -130,6 +130,27 @@ session_t *pager_tick(pager_t *p, model_t *m, uint32_t now_ms)
     }
 
     /*
+     * **庆祝没演完，不让位。**
+     *
+     * 这一条必须排在抢占之前。典型场景：A、B 两个会话都在跑，正在轮播；
+     * A 干完了 → A 转入 DONE、B 仍是 BUSY → 此刻"恰好一个在忙"成立，
+     * 抢占规则立刻把焦点拽到 B，A 的庆祝被拦腰切断。
+     * 结果就是**庆祝动画永远演不完**，而它恰恰是最该被看见的那一下。
+     *
+     * model_clawd_state() 在 done_pending 且未超过 DONE_HOLD_MS 时返回
+     * CLAWD_DONE，所以这里的判定和精灵实际在演的动作是同一个来源，
+     * 不会出现"状态说演完了、画面还在跳"的错位。
+     *
+     * 前提是完成的会话在庆祝期间仍留在环里——DONE_LINGER_MS(5.5s)
+     * 大于 DONE_HOLD_MS(4s) 就是为了保证这一点。
+     */
+    session_t *cur = model_ring_at(m, p->ring_index, now_ms);
+    if (cur != NULL && model_clawd_state(cur, now_ms) == CLAWD_DONE) {
+        p->focus_since = now_ms; /* 冻结轮播计时，演完再从头计 */
+        return cur;
+    }
+
+    /*
      * 抢占优先于轮播：**恰好一个**会话在干活时锁定它。
      * 那一刻你想盯着的就是它，没有什么可轮的。
      */
